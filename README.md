@@ -130,4 +130,5 @@ Latest copied debug APK size: 25,635,481 bytes.
 - Car template entry test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.16-car-template-entry`
 - Now Playing visualizer stage test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.17-now-playing-visualizer-stage`
 - Visualizer/controls/discovery test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.18-visualizer-controls-discovery`
+- Prebuffer waveform test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.19-prebuffer-waveform`
 - DevHub release that adds JellyMix to the catalog: `https://github.com/BadBagger/softsmith-devhub/releases/tag/v2.1.88-jellymix`
