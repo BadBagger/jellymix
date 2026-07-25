@@ -4,6 +4,7 @@ import com.smithware.jellymix.ui.theme.ThemeMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.json.JSONObject
 
 class RecommendationTest {
     @Test
@@ -148,6 +149,30 @@ class RecommendationTest {
 
         assertEquals(ints, ints.toStorageString().toIntMap())
         assertEquals(booleans, booleans.toStorageString().toBooleanMap())
+    }
+
+    @Test
+    fun cachedLibraryRoundTripKeepsArtworkUrls() {
+        val track = sampleTrack("cached", liked = true, plays = 4, completion = 0.9f)
+            .copy(imageUrl = "https://music.example/Items/album/Images/Primary")
+        val playlist = JellyfinPlaylist(
+            id = "playlist",
+            name = "Road Mix",
+            childCount = 12,
+            imageUrl = "https://music.example/Items/playlist/Images/Primary"
+        )
+
+        assertEquals(listOf(track), listOf(track).toTrackCacheString().toTrackList())
+        assertEquals(listOf(playlist), listOf(playlist).toPlaylistCacheString().toPlaylistList())
+    }
+
+    @Test
+    fun imageTagDetectionRequiresPrimaryImage() {
+        val withPrimary = JSONObject("""{"ImageTags":{"Primary":"abc"}}""")
+        val withoutPrimary = JSONObject("""{"ImageTags":{"Backdrop":"abc"}}""")
+
+        assertTrue(withPrimary.hasPrimaryImage())
+        assertEquals(false, withoutPrimary.hasPrimaryImage())
     }
 
     @Test

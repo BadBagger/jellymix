@@ -32,7 +32,8 @@ What exists:
 - Queue-aware skip, queue position display, shuffle toggle, and repeat-queue toggle.
 - Playback completion advances through the active queue, then starts an autoplay radio queue instead of stopping or looping the same song.
 - Home now leads with album art, current playback, curated mix shelves, recently played, and heavy rotation instead of connection/search/status panels.
-- Album art is loaded from Jellyfin primary images across rows, mix shelves, Now Playing, and the mini player, with generated covers only as fallback.
+- Album art is loaded from Jellyfin track or album primary images across rows, mix shelves, Now Playing, and the mini player. Generated covers are always painted underneath so broken/missing Jellyfin art never leaves blank slabs.
+- The last loaded Jellyfin library and playlist list are cached locally so saved-session launches can show and play music immediately while Jellyfin refreshes in the background.
 - Tapping the mini player opens a Now Playing page with larger art, visualizer, controls, song details, queue context, and more mixes.
 - Start radio from the current track using mood, genre, artist, and local listening signals.
 - Demo playback can be paused before a Jellyfin server is connected.
@@ -44,7 +45,7 @@ What exists:
 - In-app music visualizer in Now Playing and in the mini player, with live Jellyfin audio capture when permission is granted and animated preview bands for demo/unavailable capture.
 - Login is onboarding-style: the Jellyfin connection panel hides after a real library load, and returns only when no session exists or the library did not load.
 - The mini player is compact so library/discovery content remains usable while music is playing.
-- JVM tests for recommendation ranking, local play boosts, generated mixes, autoplay queue behavior, search filtering, discovery filters, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, theme preference parsing, and visualizer band generation.
+- JVM tests for recommendation ranking, local play boosts, generated mixes, autoplay queue behavior, search filtering, discovery filters, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, cached library parsing, image tag detection, theme preference parsing, and visualizer band generation.
 
 Known remaining blocker:
 
@@ -59,7 +60,7 @@ Build a native Android Jellyfin music client that feels closer to Plexamp and Yo
 - Tailored playlists based on local listening signals: likes, skips, repeat plays, completion percentage, and longest-listened tracks.
 - Library views for artists, albums, tracks, genres, favorites, and playlists.
 - Now-playing screen with queue, like, skip, repeat, shuffle, song radio, autoplay context, visualizer, and Jellyfin stream metadata.
-- Local-first preference/history/theme cache so personalization remains private on-device.
+- Local-first preference/history/theme/library cache so personalization remains private on-device and startup is not blocked by a full Jellyfin refresh.
 
 ## Team lanes
 
@@ -102,4 +103,5 @@ Latest copied debug APK size: 22,659,918 bytes.
 - Debug test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.0-visualizer-test`
 - Login/declutter test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.1-login-declutter`
 - Home/Now Playing test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.2-home-now-playing`
+- Artwork/startup test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.3-artwork-startup`
 - DevHub release that adds JellyMix to the catalog: `https://github.com/BadBagger/softsmith-devhub/releases/tag/v2.1.88-jellymix`

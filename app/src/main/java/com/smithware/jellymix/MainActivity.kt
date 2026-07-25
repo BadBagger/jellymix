@@ -105,6 +105,7 @@ import kotlin.math.sin
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
@@ -145,29 +146,38 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     private val appContext = application.applicationContext
 
     var state by mutableStateOf(
-        JellyMixState(
-            serverUrl = prefs.getString("serverUrl", "http://jellyfin.local:8096").orEmpty(),
-            username = prefs.getString("username", "").orEmpty(),
-            token = prefs.getString("token", "").orEmpty(),
-            userId = prefs.getString("userId", "").orEmpty(),
-            themeMode = prefs.getString("themeMode", null).enumValueOrDefault(ThemeMode.System),
-            accentTheme = prefs.getString("accentTheme", null).enumValueOrDefault(AccentTheme.Jelly),
-            tracks = sampleTracks,
-            currentTrack = sampleTracks.first(),
-            jellyfinPlaylists = emptyList(),
-            selectedPlaylistTracks = emptyList(),
-            liked = prefs.getString("liked", null)?.toBooleanMap() ?: sampleTracks.associate { it.id to it.liked },
-            skips = prefs.getString("skips", null)?.toIntMap() ?: sampleTracks.associate { it.id to it.skipped },
-            longListens = prefs.getString("longListens", null)?.toIntMap() ?: sampleTracks.associate { it.id to 0 },
-            localPlays = prefs.getString("localPlays", null)?.toIntMap() ?: sampleTracks.associate { it.id to 0 },
-            recentTrackIds = prefs.getString("recentTrackIds", null)?.split(",")?.filter { it.isNotBlank() }.orEmpty()
-        )
+        run {
+            val token = prefs.getString("token", "").orEmpty()
+            val userId = prefs.getString("userId", "").orEmpty()
+            val cachedLibrary = readCachedLibrary()
+            val initialTracks = cachedLibrary.tracks.ifEmpty { sampleTracks }
+            val hasCachedSession = token.isNotBlank() && userId.isNotBlank() && cachedLibrary.tracks.isNotEmpty()
+            JellyMixState(
+                serverUrl = prefs.getString("serverUrl", "http://jellyfin.local:8096").orEmpty(),
+                username = prefs.getString("username", "").orEmpty(),
+                token = token,
+                userId = userId,
+                themeMode = prefs.getString("themeMode", null).enumValueOrDefault(ThemeMode.System),
+                accentTheme = prefs.getString("accentTheme", null).enumValueOrDefault(AccentTheme.Jelly),
+                tracks = initialTracks,
+                currentTrack = initialTracks.first(),
+                jellyfinPlaylists = cachedLibrary.playlists,
+                selectedPlaylistTracks = emptyList(),
+                liked = prefs.getString("liked", null)?.toBooleanMap() ?: initialTracks.associate { it.id to it.liked },
+                skips = prefs.getString("skips", null)?.toIntMap() ?: initialTracks.associate { it.id to it.skipped },
+                longListens = prefs.getString("longListens", null)?.toIntMap() ?: initialTracks.associate { it.id to 0 },
+                localPlays = prefs.getString("localPlays", null)?.toIntMap() ?: initialTracks.associate { it.id to 0 },
+                recentTrackIds = prefs.getString("recentTrackIds", null)?.split(",")?.filter { it.isNotBlank() }.orEmpty(),
+                libraryLoaded = hasCachedSession,
+                status = if (hasCachedSession) "Ready from saved library. Refreshing Jellyfin..." else "Ready. Connect to Jellyfin or explore demo mixes."
+            )
+        }
     )
         private set
 
     init {
         if (state.token.isNotBlank() && state.userId.isNotBlank()) {
-            loadLibrary()
+            loadLibrary(backgroundRefresh = state.libraryLoaded)
         }
     }
 
@@ -256,14 +266,18 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun loadLibrary() {
+    fun loadLibrary(backgroundRefresh: Boolean = false) {
         val serverUrl = normalizeServerUrl(state.serverUrl)
         if (serverUrl == null) {
             state = state.copy(status = "Enter a valid Jellyfin URL before reloading.")
             return
         }
         if (state.token.isBlank() || state.userId.isBlank()) return
-        state = state.copy(serverUrl = serverUrl, isLoading = true, status = "Loading Jellyfin music...")
+        state = state.copy(
+            serverUrl = serverUrl,
+            isLoading = !backgroundRefresh,
+            status = if (backgroundRefresh) "Refreshing Jellyfin in the background..." else "Loading Jellyfin music..."
+        )
         viewModelScope.launch {
             runCatching {
                 withContext(Dispatchers.IO) {
@@ -294,12 +308,17 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                     selectedPlaylistTracks = emptyList(),
                     status = "Connected. Loaded ${tracks.size} tracks and ${library.playlists.size} playlists."
                 )
+                persistCachedLibrary(tracks, library.playlists)
                 persistSignals()
             }.onFailure { error ->
                 state = state.copy(
                     isLoading = false,
-                    libraryLoaded = false,
-                    status = "Not connected to library: ${error.cleanMessage()}"
+                    libraryLoaded = state.libraryLoaded,
+                    status = if (state.libraryLoaded) {
+                        "Using saved library. Jellyfin refresh failed: ${error.cleanMessage()}"
+                    } else {
+                        "Not connected to library: ${error.cleanMessage()}"
+                    }
                 )
             }
         }
@@ -700,6 +719,19 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             .apply()
     }
 
+    private fun persistCachedLibrary(tracks: List<Track>, playlists: List<JellyfinPlaylist>) {
+        prefs.edit()
+            .putString("cachedTracks", tracks.toTrackCacheString())
+            .putString("cachedPlaylists", playlists.toPlaylistCacheString())
+            .apply()
+    }
+
+    private fun readCachedLibrary(): JellyfinLibraryLoad =
+        JellyfinLibraryLoad(
+            tracks = prefs.getString("cachedTracks", null)?.toTrackList().orEmpty(),
+            playlists = prefs.getString("cachedPlaylists", null)?.toPlaylistList().orEmpty()
+        )
+
     private fun recordPlayStart(track: Track) {
         val recent = listOf(track.id) + state.recentTrackIds.filterNot { it == track.id }
         state = state.copy(
@@ -750,7 +782,7 @@ private class JellyfinClient {
         val url = buildString {
             append("$serverUrl/Users/$userId/Items?Recursive=true&IncludeItemTypes=Audio")
             append("&StartIndex=0&Limit=250")
-            append("&Fields=Genres,UserData,RunTimeTicks,Album,Artists")
+            append("&Fields=Genres,UserData,RunTimeTicks,Album,Artists,ImageTags,AlbumId,AlbumPrimaryImageTag")
             append("&SortBy=DatePlayed,SortName&SortOrder=Descending")
             if (!musicLibraryId.isNullOrBlank()) append("&ParentId=${Uri.encode(musicLibraryId)}")
         }
@@ -768,19 +800,19 @@ private class JellyfinClient {
                 id = id,
                 name = item.optString("Name", "Playlist"),
                 childCount = item.optInt("ChildCount", 0),
-                imageUrl = imageUrl(serverUrl, id, token)
+                imageUrl = imageUrlOrNull(serverUrl, id, token, item.hasPrimaryImage())
             )
         }
     }
 
     fun fetchPlaylistTracks(serverUrl: String, userId: String, token: String, playlistId: String): List<Track> {
-        val playlistUrl = "$serverUrl/Playlists/${Uri.encode(playlistId)}/Items?UserId=${Uri.encode(userId)}&Fields=Genres,UserData,RunTimeTicks,Album,Artists"
+        val playlistUrl = "$serverUrl/Playlists/${Uri.encode(playlistId)}/Items?UserId=${Uri.encode(userId)}&Fields=Genres,UserData,RunTimeTicks,Album,Artists,ImageTags,AlbumId,AlbumPrimaryImageTag"
         val items = runCatching {
             requestJson(playlistUrl, "GET", null, token).optJSONArray("Items")
         }.getOrNull()
         if (items != null) return items.toTracks(serverUrl, token)
 
-        val fallbackUrl = "$serverUrl/Users/$userId/Items?ParentId=${Uri.encode(playlistId)}&Recursive=true&IncludeItemTypes=Audio&Fields=Genres,UserData,RunTimeTicks,Album,Artists"
+        val fallbackUrl = "$serverUrl/Users/$userId/Items?ParentId=${Uri.encode(playlistId)}&Recursive=true&IncludeItemTypes=Audio&Fields=Genres,UserData,RunTimeTicks,Album,Artists,ImageTags,AlbumId,AlbumPrimaryImageTag"
         return requestJson(fallbackUrl, "GET", null, token)
             .optJSONArray("Items")
             ?.toTracks(serverUrl, token)
@@ -802,6 +834,9 @@ private class JellyfinClient {
 
     private fun imageUrl(serverUrl: String, itemId: String, token: String): String =
         "$serverUrl/Items/${Uri.encode(itemId)}/Images/Primary?fillHeight=320&fillWidth=320&quality=90&api_key=${Uri.encode(token)}"
+
+    private fun imageUrlOrNull(serverUrl: String, itemId: String, token: String, hasPrimaryImage: Boolean): String? =
+        if (hasPrimaryImage) imageUrl(serverUrl, itemId, token) else null
 
     private fun requestJson(url: String, method: String, body: String?, token: String?): JSONObject =
         JSONObject(requestText(url, method, body, token))
@@ -838,6 +873,12 @@ private class JellyfinClient {
             val genres = item.optJSONArray("Genres")
             val genre = if (genres != null && genres.length() > 0) genres.optString(0) else "Library"
             val ticks = item.optLong("RunTimeTicks", 0L)
+            val albumId = item.optString("AlbumId").takeIf { it.isNotBlank() }
+            val imageItemId = when {
+                item.hasPrimaryImage() -> id
+                !albumId.isNullOrBlank() && item.optString("AlbumPrimaryImageTag").isNotBlank() -> albumId
+                else -> null
+            }
             Track(
                 id = id,
                 title = item.optString("Name", "Untitled"),
@@ -850,7 +891,7 @@ private class JellyfinClient {
                 completion = ((userData?.optDouble("PlayedPercentage", 0.0) ?: 0.0) / 100.0).toFloat().coerceIn(0f, 1f),
                 skipped = 0,
                 liked = userData?.optBoolean("IsFavorite", false) ?: false,
-                imageUrl = imageUrl(serverUrl, id, token)
+                imageUrl = imageItemId?.let { imageUrl(serverUrl, it, token) }
             )
         }
 }
@@ -1744,24 +1785,7 @@ private fun PlayerBar(
 
 @Composable
 private fun AlbumArt(track: Track, size: Int = 54) {
-    if (!track.imageUrl.isNullOrBlank()) {
-        AsyncImage(
-            model = track.imageUrl,
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .size(size.dp)
-                .clip(RoundedCornerShape(8.dp))
-        )
-        return
-    }
-    val colors = when (track.genre.lowercase()) {
-        "synth", "electronic" -> listOf(Color(0xFF00D9B5), Color(0xFF284BFF))
-        "ambient", "classical" -> listOf(Color(0xFFB8E1FF), Color(0xFF7A89C2))
-        "rock", "metal" -> listOf(Color(0xFF2E3532), Color(0xFFD8A47F))
-        "hip hop", "rap" -> listOf(Color(0xFFFF6B6B), Color(0xFFFFC857))
-        else -> listOf(Color(0xFFF7F3E8), Color(0xFF00D9B5))
-    }
+    val colors = coverColors(track.genre)
     Box(
         modifier = Modifier
             .size(size.dp)
@@ -1775,21 +1799,19 @@ private fun AlbumArt(track: Track, size: Int = 54) {
                 .clip(CircleShape)
                 .background(Color(0xCC101113))
         )
+        if (!track.imageUrl.isNullOrBlank()) {
+            AsyncImage(
+                model = track.imageUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
     }
 }
 
 @Composable
 private fun PlaylistArt(playlist: JellyfinPlaylist) {
-    if (!playlist.imageUrl.isNullOrBlank()) {
-        AsyncImage(
-            model = playlist.imageUrl,
-            contentDescription = null,
-            modifier = Modifier
-                .size(116.dp)
-                .clip(RoundedCornerShape(8.dp))
-        )
-        return
-    }
     Box(
         modifier = Modifier
             .size(116.dp)
@@ -1798,8 +1820,25 @@ private fun PlaylistArt(playlist: JellyfinPlaylist) {
         contentAlignment = Alignment.Center
     ) {
         Icon(Icons.AutoMirrored.Filled.PlaylistPlay, contentDescription = null, tint = Color(0xFF101113), modifier = Modifier.size(42.dp))
+        if (!playlist.imageUrl.isNullOrBlank()) {
+            AsyncImage(
+                model = playlist.imageUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
     }
 }
+
+private fun coverColors(genre: String): List<Color> =
+    when (genre.lowercase()) {
+        "synth", "electronic" -> listOf(Color(0xFF00D9B5), Color(0xFF284BFF))
+        "ambient", "classical" -> listOf(Color(0xFFB8E1FF), Color(0xFF7A89C2))
+        "rock", "metal" -> listOf(Color(0xFF2E3532), Color(0xFFD8A47F))
+        "hip hop", "rap" -> listOf(Color(0xFFFF6B6B), Color(0xFFFFC857))
+        else -> listOf(Color(0xFFF7F3E8), Color(0xFF00D9B5))
+    }
 
 private enum class Tab(val label: String, val icon: ImageVector) {
     Home("Home", Icons.Filled.Home),
@@ -2114,6 +2153,81 @@ internal fun String.toBooleanMap(): Map<String, Boolean> =
         val parts = it.split("=", limit = 2)
         if (parts.size == 2) parts[1].toBooleanStrictOrNull()?.let { value -> parts[0] to value } else null
     }.toMap()
+
+internal fun List<Track>.toTrackCacheString(): String {
+    val items = JSONArray()
+    forEach { track ->
+        items.put(
+            JSONObject()
+                .put("id", track.id)
+                .put("title", track.title)
+                .put("artist", track.artist)
+                .put("album", track.album)
+                .put("genre", track.genre)
+                .put("mood", track.mood)
+                .put("durationSec", track.durationSec)
+                .put("plays", track.plays)
+                .put("completion", track.completion.toDouble())
+                .put("skipped", track.skipped)
+                .put("liked", track.liked)
+                .put("imageUrl", track.imageUrl)
+        )
+    }
+    return items.toString()
+}
+
+internal fun String.toTrackList(): List<Track> =
+    runCatching {
+        val items = JSONArray(this)
+        (0 until items.length()).mapNotNull { index ->
+            val item = items.optJSONObject(index) ?: return@mapNotNull null
+            Track(
+                id = item.optString("id").takeIf { it.isNotBlank() } ?: return@mapNotNull null,
+                title = item.optString("title", "Untitled"),
+                artist = item.optString("artist", "Unknown Artist"),
+                album = item.optString("album", "Unknown Album"),
+                genre = item.optString("genre", "Library"),
+                mood = item.optString("mood", "Library"),
+                durationSec = item.optInt("durationSec", 1).coerceAtLeast(1),
+                plays = item.optInt("plays", 0),
+                completion = item.optDouble("completion", 0.0).toFloat().coerceIn(0f, 1f),
+                skipped = item.optInt("skipped", 0),
+                liked = item.optBoolean("liked", false),
+                imageUrl = item.optString("imageUrl").takeIf { it.isNotBlank() && it != "null" }
+            )
+        }
+    }.getOrDefault(emptyList())
+
+internal fun List<JellyfinPlaylist>.toPlaylistCacheString(): String {
+    val items = JSONArray()
+    forEach { playlist ->
+        items.put(
+            JSONObject()
+                .put("id", playlist.id)
+                .put("name", playlist.name)
+                .put("childCount", playlist.childCount)
+                .put("imageUrl", playlist.imageUrl)
+        )
+    }
+    return items.toString()
+}
+
+internal fun String.toPlaylistList(): List<JellyfinPlaylist> =
+    runCatching {
+        val items = JSONArray(this)
+        (0 until items.length()).mapNotNull { index ->
+            val item = items.optJSONObject(index) ?: return@mapNotNull null
+            JellyfinPlaylist(
+                id = item.optString("id").takeIf { it.isNotBlank() } ?: return@mapNotNull null,
+                name = item.optString("name", "Playlist"),
+                childCount = item.optInt("childCount", 0),
+                imageUrl = item.optString("imageUrl").takeIf { it.isNotBlank() && it != "null" }
+            )
+        }
+    }.getOrDefault(emptyList())
+
+internal fun JSONObject.hasPrimaryImage(): Boolean =
+    optJSONObject("ImageTags")?.optString("Primary")?.isNotBlank() == true
 
 internal inline fun <reified T : Enum<T>> String?.enumValueOrDefault(default: T): T =
     this?.let { value ->
