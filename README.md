@@ -101,4 +101,5 @@ Latest copied debug APK size: 22,659,918 bytes.
 - Source repo: `https://github.com/BadBagger/jellymix`
 - Debug test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.0-visualizer-test`
 - Login/declutter test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.1-login-declutter`
+- Home/Now Playing test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.2-home-now-playing`
 - DevHub release that adds JellyMix to the catalog: `https://github.com/BadBagger/softsmith-devhub/releases/tag/v2.1.88-jellymix`

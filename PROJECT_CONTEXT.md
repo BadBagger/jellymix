@@ -54,6 +54,7 @@ Published:
 - Debug test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.0-visualizer-test`
 - DevHub catalog release: `https://github.com/BadBagger/softsmith-devhub/releases/tag/v2.1.88-jellymix`
 - Login/declutter release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.1-login-declutter`
+- Home/Now Playing release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.2-home-now-playing`
 - Server reachability from the Windows workspace was confirmed for `http://www.badgerflix.win/System/Info/Public` and `https://www.badgerflix.win/System/Info/Public`; both returned BadgerFlix `10.11.11`. Phone-side library loading still needs verification.
 
 ## Immediate Next Blocker
