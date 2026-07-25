@@ -2031,22 +2031,38 @@ private fun NowPlayingPage(
                         .fillMaxWidth()
                         .height(92.dp)
                 )
-                Row(horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                    IconButton(onClick = onShuffle) {
-                        Icon(Icons.Filled.Shuffle, contentDescription = "Shuffle", tint = if (state.shuffleEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    IconButton(onClick = onLike) {
-                        Icon(if (state.liked[track.id] == true) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder, contentDescription = "Like")
-                    }
-                    IconButton(onClick = onPlayPause) {
-                        Icon(if (state.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, contentDescription = "Play")
-                    }
-                    IconButton(onClick = onSkip) {
-                        Icon(Icons.Filled.SkipNext, contentDescription = "Skip")
-                    }
-                    IconButton(onClick = onRepeat) {
-                        Icon(Icons.Filled.Repeat, contentDescription = "Repeat", tint = if (state.repeatEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
+                Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    DrivingControlButton(
+                        icon = Icons.Filled.Shuffle,
+                        contentDescription = "Shuffle",
+                        active = state.shuffleEnabled,
+                        onClick = onShuffle
+                    )
+                    DrivingControlButton(
+                        icon = if (state.liked[track.id] == true) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                        contentDescription = "Like",
+                        active = state.liked[track.id] == true,
+                        onClick = onLike
+                    )
+                    DrivingControlButton(
+                        icon = if (state.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        contentDescription = if (state.isPlaying) "Pause" else "Play",
+                        prominent = true,
+                        size = 76,
+                        iconSize = 38,
+                        onClick = onPlayPause
+                    )
+                    DrivingControlButton(
+                        icon = Icons.Filled.SkipNext,
+                        contentDescription = "Skip",
+                        onClick = onSkip
+                    )
+                    DrivingControlButton(
+                        icon = Icons.Filled.Repeat,
+                        contentDescription = "Repeat",
+                        active = state.repeatEnabled,
+                        onClick = onRepeat
+                    )
                 }
                 Button(onClick = onStartRadio, modifier = Modifier.fillMaxWidth()) {
                     Text("Start song radio")
@@ -2068,6 +2084,43 @@ private fun NowPlayingPage(
         }
         AutoplayPreviewSection(state, onTrackSelected)
         MixRail("More to play", mixes.take(4), onQueueSelected, onShuffledQueueSelected, onTrackSelected)
+    }
+}
+
+@Composable
+private fun DrivingControlButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    active: Boolean = false,
+    prominent: Boolean = false,
+    size: Int = 60,
+    iconSize: Int = 30
+) {
+    val containerColor = when {
+        prominent -> MaterialTheme.colorScheme.primary
+        active -> MaterialTheme.colorScheme.primaryContainer
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    val iconColor = when {
+        prominent -> MaterialTheme.colorScheme.onPrimary
+        active -> MaterialTheme.colorScheme.onPrimaryContainer
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Box(
+        modifier = Modifier
+            .size(size.dp)
+            .clip(CircleShape)
+            .background(containerColor)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = iconColor,
+            modifier = Modifier.size(iconSize.dp)
+        )
     }
 }
 
