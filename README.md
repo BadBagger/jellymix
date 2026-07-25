@@ -124,4 +124,5 @@ Latest copied debug APK size: 22,660,483 bytes.
 - Expanded media controls test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.11-expanded-media-controls`
 - Widget control fix test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.12-widget-control-fix`
 - Media control service test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.13-media-control-service`
+- Android Auto audio-route test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.14-android-auto-audio-route`
 - DevHub release that adds JellyMix to the catalog: `https://github.com/BadBagger/softsmith-devhub/releases/tag/v2.1.88-jellymix`

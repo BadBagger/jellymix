@@ -76,6 +76,7 @@ Published:
 - Expanded media controls release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.11-expanded-media-controls`
 - Widget control fix release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.12-widget-control-fix`
 - Media control service release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.13-media-control-service`
+- Android Auto audio-route release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.14-android-auto-audio-route`
 - Server reachability from the Windows workspace was confirmed for `http://www.badgerflix.win/System/Info/Public` and `https://www.badgerflix.win/System/Info/Public`; both returned BadgerFlix `10.11.11`. Phone-side library loading still needs verification.
 
 ## Immediate Next Blocker
