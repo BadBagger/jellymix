@@ -70,7 +70,7 @@ Published:
 - Android Auto release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.6-android-auto`
 - Driving controls release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.7-driving-controls`
 - Home/widget refresh release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.8-home-widget-refresh`
-- Functional widget controls release: pending
+- Functional widget controls release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.9-widget-controls`
 - Server reachability from the Windows workspace was confirmed for `http://www.badgerflix.win/System/Info/Public` and `https://www.badgerflix.win/System/Info/Public`; both returned BadgerFlix `10.11.11`. Phone-side library loading still needs verification.
 
 ## Immediate Next Blocker
