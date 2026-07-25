@@ -50,7 +50,7 @@ What exists:
 - Custom theme options with System/Light/Dark mode and Jelly, Ember, Ocean, Grape, and Mono accent palettes persisted locally.
 - In-app music visualizer in Now Playing and in the mini player, with live Jellyfin audio capture when permission is granted and animated preview bands for demo/unavailable capture.
 - Now Playing uses larger driving-friendly transport controls with a prominent play/pause button and clearer active states for shuffle, like, and repeat.
-- Android home-screen widget is included. It shows the current track, artist, Jellyfin context, and routed play/pause and skip controls that open JellyMix through the existing playback path.
+- Android home-screen widget is included. It shows the current track, artist, Jellyfin context, and play/pause plus skip controls. The widget background opens JellyMix, but the playback buttons dispatch foreground-service commands instead of launching the app.
 - Lock-screen/media notification controls are included with a media-style notification, playback `MediaSession`, public lock-screen visibility, and Previous, Play/Pause, Skip, and Stop actions routed through the existing playback path.
 - Login is onboarding-style: the Jellyfin connection panel hides after a real library load, and returns only when no session exists or the library did not load.
 - The mini player is compact so library/discovery content remains usable while music is playing.
@@ -94,7 +94,7 @@ $env:PATH="$env:JAVA_HOME\bin;$env:ANDROID_HOME\platform-tools;$env:ANDROID_HOME
 .\gradlew.bat :app:assembleDebug
 ```
 
-Verified on July 24, 2026 with:
+Verified on July 25, 2026 with:
 
 ```powershell
 .\gradlew.bat :app:testDebugUnitTest :app:assembleDebug
@@ -105,7 +105,7 @@ Debug APK:
 - `JellyMix-debug.apk`
 - `app/build/outputs/apk/debug/app-debug.apk`
 
-Latest copied debug APK size: 22,659,918 bytes.
+Latest copied debug APK size: 22,660,483 bytes.
 
 ## Test release
 
@@ -122,4 +122,5 @@ Latest copied debug APK size: 22,659,918 bytes.
 - Functional widget controls test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.9-widget-controls`
 - Lock-screen controls test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.10-lockscreen-controls`
 - Expanded media controls test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.11-expanded-media-controls`
+- Widget control fix test release: pending `v0.1.12-widget-control-fix`
 - DevHub release that adds JellyMix to the catalog: `https://github.com/BadBagger/softsmith-devhub/releases/tag/v2.1.88-jellymix`

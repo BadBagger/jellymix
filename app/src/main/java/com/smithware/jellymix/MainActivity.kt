@@ -182,6 +182,12 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     private var lastVisualizerUpdateMs = 0L
     private val appContext = application.applicationContext
     private val playbackNotificationController = PlaybackNotificationController(appContext)
+    private val widgetPlaybackController = object : WidgetPlaybackController {
+        override fun togglePlayPause() = this@JellyMixViewModel.togglePlayPause()
+        override fun skip() = this@JellyMixViewModel.skip()
+        override fun previous() = this@JellyMixViewModel.previous()
+        override fun stopPlayback() = this@JellyMixViewModel.stopPlayback()
+    }
 
     var state by mutableStateOf(
         run {
@@ -225,6 +231,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         private set
 
     init {
+        WidgetPlaybackBridge.register(widgetPlaybackController)
         if (state.token.isNotBlank() && state.userId.isNotBlank()) {
             loadLibrary(backgroundRefresh = state.libraryLoaded)
         }
@@ -944,6 +951,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     }
 
     override fun onCleared() {
+        WidgetPlaybackBridge.unregister(widgetPlaybackController)
         player?.release()
         player = null
         playbackNotificationController.release()
