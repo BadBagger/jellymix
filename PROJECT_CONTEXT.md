@@ -44,7 +44,7 @@ Done:
 - Custom theme options exist in the connection/settings card: System, Light, and Dark mode plus Jelly, Ember, Ocean, Grape, and Mono accent palettes. The selections persist locally.
 - An in-app visualizer exists in Now Playing and in the mini player. It uses Android audio-session waveform capture for real Jellyfin playback after `RECORD_AUDIO` permission, and falls back to animated preview bands for demo mode or unavailable capture.
 - Now Playing uses larger driving-friendly transport controls: 60dp secondary buttons, a 76dp primary play/pause button, and clear active states for shuffle, like, and repeat.
-- Android home-screen widget is included. It reads the local current-track cache, shows title/artist/Jellyfin context, and opens JellyMix from the widget surface.
+- Android home-screen widget is included. It reads the local current-track cache, shows title/artist/Jellyfin context, and routes play/pause and skip taps into `MainActivity` so widget controls reuse the existing playback path.
 - The Jellyfin connection card is onboarding-style: it hides after the library actually loads and reappears only when there is no saved session or the saved session fails to load the library.
 - The mini player was reduced to a compact control surface after phone screenshots showed the previous player consumed too much screen space.
 - Recommendation, local play boost, generated mix, vibe playlist search/ranking, Jarvis DJ prompt/mode handling, autoplay queue, search, discovery filter, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, cached library parsing, image tag detection, theme preference parsing, and visualizer band tests exist in `app/src/test/java/com/smithware/jellymix/RecommendationTest.kt`.
@@ -70,6 +70,7 @@ Published:
 - Android Auto release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.6-android-auto`
 - Driving controls release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.7-driving-controls`
 - Home/widget refresh release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.8-home-widget-refresh`
+- Functional widget controls release: pending
 - Server reachability from the Windows workspace was confirmed for `http://www.badgerflix.win/System/Info/Public` and `https://www.badgerflix.win/System/Info/Public`; both returned BadgerFlix `10.11.11`. Phone-side library loading still needs verification.
 
 ## Immediate Next Blocker

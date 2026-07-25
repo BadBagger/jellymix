@@ -2,6 +2,7 @@ package com.smithware.jellymix
 
 import android.Manifest
 import android.app.Application
+import android.content.Intent
 import android.media.MediaPlayer
 import android.media.audiofx.Visualizer
 import android.net.Uri
@@ -108,6 +109,9 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
+internal const val WIDGET_ACTION_PLAY_PAUSE = "com.smithware.jellymix.widget.PLAY_PAUSE"
+internal const val WIDGET_ACTION_SKIP = "com.smithware.jellymix.widget.SKIP"
+
 class MainActivity : ComponentActivity() {
     private val viewModel: JellyMixViewModel by viewModels()
 
@@ -133,6 +137,20 @@ class MainActivity : ComponentActivity() {
                     }
                 )
             }
+        }
+        handleWidgetAction(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleWidgetAction(intent)
+    }
+
+    private fun handleWidgetAction(intent: Intent?) {
+        when (intent?.action) {
+            WIDGET_ACTION_PLAY_PAUSE -> viewModel.togglePlayPause()
+            WIDGET_ACTION_SKIP -> viewModel.skip()
         }
     }
 }
@@ -431,6 +449,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 visualizerMessage = "Visualizer paused.",
                 status = "Paused demo playback."
             )
+            persistPlaybackState()
             return
         }
         val activePlayer = player
@@ -443,6 +462,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 visualizerMessage = "Visualizer paused.",
                 status = "Paused."
             )
+            persistPlaybackState()
             return
         }
         playCurrentTrack()
@@ -590,6 +610,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             .remove("queueIds")
             .remove("queueTitle")
             .remove("djMode")
+            .remove("isPlaying")
             .apply()
         state = state.copy(
             token = "",
@@ -612,6 +633,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             visualizerMessage = "Visualizer preview is active. Enable audio capture for live Jellyfin waveforms.",
             status = "Session cleared. Demo discovery mode is active."
         )
+        JellyMixWidgetProvider.updateAll(getApplication())
     }
 
     private fun advanceQueue(countSkip: Boolean, keepPlaying: Boolean) {
@@ -620,8 +642,19 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             state = state.copy(skips = state.skips + (currentId to ((state.skips[currentId] ?: 0) + 1)))
         }
         val fallbackQueue = state.rankedTracks()
-        val queue = state.queue.ifEmpty { fallbackQueue }
-        val reachedEnd = isQueueEnd(state.queueIndex, queue.size, state.repeatEnabled)
+        val hadQueue = state.queue.isNotEmpty()
+        val queue = state.queue.ifEmpty {
+            buildAutoplayQueue(
+                seed = state.currentTrack,
+                tracks = state.tracks,
+                liked = state.liked,
+                longListens = state.longListens,
+                skips = state.skips,
+                localPlays = state.localPlays,
+                recentlyPlayedIds = state.recentTrackIds
+            ).ifEmpty { fallbackQueue }
+        }
+        val reachedEnd = hadQueue && isQueueEnd(state.queueIndex, queue.size, state.repeatEnabled)
         val nextQueue = if (reachedEnd && !state.repeatEnabled) {
             buildAutoplayQueue(
                 seed = state.currentTrack,
@@ -635,15 +668,19 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         } else {
             queue
         }
-        val nextIndex = if (reachedEnd && !state.repeatEnabled) 0 else nextQueueIndex(state.queueIndex, nextQueue.size, state.repeatEnabled)
+        val nextIndex = when {
+            !hadQueue -> 0
+            reachedEnd && !state.repeatEnabled -> 0
+            else -> nextQueueIndex(state.queueIndex, nextQueue.size, state.repeatEnabled)
+        }
         val nextTrack = nextQueue.getOrNull(nextIndex) ?: fallbackQueue.first()
         state = state.copy(
             currentTrack = nextTrack,
             queue = nextQueue,
             queueIndex = nextIndex,
-            queueTitle = if (reachedEnd && !state.repeatEnabled) "Autoplay radio" else state.queueTitle,
+            queueTitle = if (!hadQueue || reachedEnd && !state.repeatEnabled) "Autoplay radio" else state.queueTitle,
             isPlaying = keepPlaying,
-            status = if (reachedEnd && !state.repeatEnabled) "Autoplaying ${nextTrack.title}." else "Queued ${nextTrack.title}."
+            status = if (!hadQueue || reachedEnd && !state.repeatEnabled) "Autoplaying ${nextTrack.title}." else "Queued ${nextTrack.title}."
         )
         persistPlaybackState()
         persistSignals()
@@ -694,6 +731,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 visualizerMessage = "Preview visualizer is reacting to the queued demo track.",
                 status = "Demo playback active. Connect Jellyfin to stream real audio."
             )
+            persistPlaybackState()
             return
         }
         val streamUrl = client.streamUrl(state.serverUrl, track.id, state.token)
@@ -711,6 +749,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                         visualizerBands = syntheticVisualizerBands(track),
                         status = "Playing ${track.title}."
                     )
+                    persistPlaybackState()
                     startAudioVisualizer(it.audioSessionId)
                 }
                 setOnCompletionListener {
@@ -726,6 +765,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                         visualizerMessage = "Visualizer paused after playback error.",
                         status = "Playback failed for ${track.title}."
                     )
+                    persistPlaybackState()
                     true
                 }
                 prepareAsync()
@@ -738,6 +778,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 visualizerMessage = "Visualizer paused after playback error.",
                 status = "Playback failed: ${error.cleanMessage()}"
             )
+            persistPlaybackState()
         }
     }
 
@@ -819,6 +860,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             .putInt("queueIndex", state.queueIndex)
             .putString("queueTitle", state.queueTitle)
             .putString("djMode", state.djMode.name)
+            .putBoolean("isPlaying", state.isPlaying)
             .apply()
         JellyMixWidgetProvider.updateAll(getApplication())
     }
