@@ -35,7 +35,7 @@ What exists:
 - Home now takes stronger inspiration from modern music apps with mood chips, a speed-dial mix grid, full-cover discovery tiles, and mixed-for-you rails.
 - Album art is loaded from Jellyfin track or album primary images across rows, mix shelves, Now Playing, and the mini player. Generated covers are always painted underneath so broken/missing Jellyfin art never leaves blank slabs.
 - The last loaded Jellyfin library and playlist list are cached locally so saved-session launches can show and play music immediately while Jellyfin refreshes in the background.
-- Tapping the mini player opens a Now Playing page with larger art, visualizer, controls, song details, queue context, and more mixes.
+- Tapping the mini player opens a cleaner Now Playing page centered on a square album-art/visualizer stage, driving-friendly controls, DJ mode, queue context, autoplay preview, and more mixes. Tapping the square stage toggles between album art and the visualizer.
 - Jarvis DJ adds a local conversational radio coordinator in Discover. It accepts prompts like "give me deep cuts", "chill it out", or "more from this artist", changes DJ mode, rebuilds the queue, and explains why tracks are coming next without sending listening data to a cloud service.
 - Guest DJ modes include Flow, Familiar, Discovery, Deep cuts, Artist focus, High energy, and Chill. Now Playing shows the active mode plus an autoplay preview with reasons for upcoming tracks.
 - Vibe tab adds emotion/activity playlist search for moods like Chill, Hype, Sad, Angry, Focus, Late Night, Happy, Nostalgic, Workout, and Rainy, plus custom metadata-based vibe searches.
@@ -49,7 +49,7 @@ What exists:
 - Local play counts persist and influence recommendation ranking.
 - Custom theme options with System/Light/Dark mode and Jelly, Ember, Ocean, Grape, and Mono accent palettes persisted locally.
 - In-app music visualizer in Now Playing and in the mini player, with live Jellyfin audio capture when permission is granted and animated preview bands for demo/unavailable capture.
-- Now Playing uses larger driving-friendly transport controls with a prominent play/pause button and clearer active states for shuffle, like, and repeat.
+- Now Playing hides the mini player while open, removes low-value song-detail clutter, and uses larger driving-friendly transport controls with a prominent play/pause button plus clearer active states for shuffle, like, and repeat.
 - Android home-screen widget is included. It shows the current track, artist, Jellyfin context, and play/pause plus skip controls. The widget background opens JellyMix, but the playback buttons dispatch foreground-service commands instead of launching the app.
 - Lock-screen/media notification controls are included with a media-style notification, playback `MediaSession`, public lock-screen visibility, and Previous, Play/Pause, Skip, and Stop actions routed through private playback commands instead of activity launches.
 - Login is onboarding-style: the Jellyfin connection panel hides after a real library load, and returns only when no session exists or the library did not load.

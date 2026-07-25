@@ -34,7 +34,7 @@ Done:
 - Home also has mood chips, a speed-dial mix grid, full-cover discovery tiles, and mixed-for-you rails inspired by modern music app discovery surfaces.
 - Jellyfin track or album primary image artwork is used across Home rails, mix shelves, Now Playing, track rows, and the mini player. Generated gradient covers are always drawn underneath real images so missing/broken Jellyfin art does not render as an empty slab.
 - The last loaded Jellyfin track and playlist lists are cached locally in SharedPreferences. Saved-session launches render the cached library immediately and refresh Jellyfin in the background, so startup is not blocked before playback is usable.
-- Tapping the mini player opens a Now Playing page with larger album art, visualizer, transport controls, song details, queue context, autoplay status, and more mixes.
+- Tapping the mini player opens a cleaner Now Playing page centered on a square album-art/visualizer stage, transport controls, DJ mode, queue context, autoplay status, and more mixes. Tapping the square stage toggles between album art and the visualizer.
 - Jarvis DJ is implemented as a local conversational radio coordinator. It accepts free-form prompts and quick suggestions, infers Guest DJ modes, rebuilds the queue, persists the active mode/current queue/current track, and explains upcoming track reasons without sending listening data to a cloud service.
 - Guest DJ modes include Flow, Familiar, Discovery, Deep cuts, Artist focus, High energy, and Chill. Now Playing includes DJ mode controls and an autoplay preview with queue reasons.
 - Vibe tab is implemented for emotion/activity playlist search. It supports preset vibes like Chill, Hype, Sad, Angry, Focus, Late Night, Happy, Nostalgic, Workout, and Rainy, and custom metadata searches that build playable vibe mixes.
@@ -43,13 +43,13 @@ Done:
 - Recently played and local play counts persist on-device and influence ranking.
 - Custom theme options exist in the connection/settings card: System, Light, and Dark mode plus Jelly, Ember, Ocean, Grape, and Mono accent palettes. The selections persist locally.
 - An in-app visualizer exists in Now Playing and in the mini player. It uses Android audio-session waveform capture for real Jellyfin playback after `RECORD_AUDIO` permission, and falls back to animated preview bands for demo mode or unavailable capture.
-- Now Playing uses larger driving-friendly transport controls: 60dp secondary buttons, a 76dp primary play/pause button, and clear active states for shuffle, like, and repeat.
+- Now Playing hides the mini player while open, removes the low-value song-detail card, and uses larger driving-friendly transport controls: 60dp secondary buttons, a 76dp primary play/pause button, and clear active states for shuffle, like, and repeat.
 - Android home-screen widget is included. It reads the local current-track cache, shows title/artist/Jellyfin context, keeps the widget background as an app-open target, and routes play/pause plus skip taps to private foreground-service playback commands so button taps do not open `MainActivity`.
 - Lock-screen/media notification controls are included. The app owns a playback `MediaSession`, posts a public media-style notification with Previous, Play/Pause, Skip, and Stop actions, requests Android 13+ notification permission when playback starts, and routes notification action buttons through private playback commands instead of opening `MainActivity`.
 - The Jellyfin connection card is onboarding-style: it hides after the library actually loads and reappears only when there is no saved session or the saved session fails to load the library.
 - The mini player was reduced to a compact control surface after phone screenshots showed the previous player consumed too much screen space.
 - Recommendation, local play boost, generated mix, vibe playlist search/ranking, Jarvis DJ prompt/mode handling, autoplay queue, search, discovery filter, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, cached library parsing, image tag detection, theme preference parsing, and visualizer band tests exist in `app/src/test/java/com/smithware/jellymix/RecommendationTest.kt`.
-- `.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug` passed on July 25, 2026 after the Car App Library media-template entry point.
+- `.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug` passed on July 25, 2026 after the cleaner Now Playing visualizer/art toggle pass.
 
 Not done:
 

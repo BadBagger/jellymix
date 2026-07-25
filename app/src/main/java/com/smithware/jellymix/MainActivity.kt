@@ -25,7 +25,9 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -1157,7 +1159,12 @@ private fun JellyMixApp(
         ) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 104.dp),
+                contentPadding = PaddingValues(
+                    start = 16.dp,
+                    top = 12.dp,
+                    end = 16.dp,
+                    bottom = if (showNowPlaying) 20.dp else 104.dp
+                ),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 if (state.shouldShowConnectionCard && !showNowPlaying) {
@@ -1276,25 +1283,27 @@ private fun JellyMixApp(
                     }
                 }
             }
-            PlayerBar(
-                track = state.currentTrack,
-                isPlaying = state.isPlaying,
-                liked = state.liked[state.currentTrack.id] == true,
-                status = state.status,
-                queueLabel = state.queueLabel,
-                visualizerBands = state.visualizerBands,
-                shuffleEnabled = state.shuffleEnabled,
-                repeatEnabled = state.repeatEnabled,
-                onPlayPause = viewModel::togglePlayPause,
-                onLike = viewModel::toggleLike,
-                onLongListen = viewModel::markLongListen,
-                onSkip = viewModel::skip,
-                onShuffle = viewModel::toggleShuffle,
-                onRepeat = viewModel::toggleRepeat,
-                onStartRadio = viewModel::startRadioFromCurrent,
-                onOpenNowPlaying = { showNowPlaying = true },
-                modifier = Modifier.align(Alignment.BottomCenter)
-            )
+            if (!showNowPlaying) {
+                PlayerBar(
+                    track = state.currentTrack,
+                    isPlaying = state.isPlaying,
+                    liked = state.liked[state.currentTrack.id] == true,
+                    status = state.status,
+                    queueLabel = state.queueLabel,
+                    visualizerBands = state.visualizerBands,
+                    shuffleEnabled = state.shuffleEnabled,
+                    repeatEnabled = state.repeatEnabled,
+                    onPlayPause = viewModel::togglePlayPause,
+                    onLike = viewModel::toggleLike,
+                    onLongListen = viewModel::markLongListen,
+                    onSkip = viewModel::skip,
+                    onShuffle = viewModel::toggleShuffle,
+                    onRepeat = viewModel::toggleRepeat,
+                    onStartRadio = viewModel::startRadioFromCurrent,
+                    onOpenNowPlaying = { showNowPlaying = true },
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                )
+            }
         }
     }
 }
@@ -2217,23 +2226,23 @@ private fun NowPlayingPage(
     onTrackSelected: (Track) -> Unit
 ) {
     val track = state.currentTrack
+    var showVisualizerStage by remember(track.id) { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                AlbumArt(track, size = 220)
+                NowPlayingStage(
+                    track = track,
+                    bands = state.visualizerBands,
+                    isPlaying = state.isPlaying,
+                    showVisualizer = showVisualizerStage,
+                    onToggle = { showVisualizerStage = !showVisualizerStage }
+                )
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(track.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(track.artist, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(track.album, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 LinearProgressIndicator(progress = { track.completion.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
-                MusicVisualizer(
-                    bands = state.visualizerBands,
-                    isPlaying = state.isPlaying,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(92.dp)
-                )
                 Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                     DrivingControlButton(
                         icon = Icons.Filled.Shuffle,
@@ -2272,21 +2281,49 @@ private fun NowPlayingPage(
                 }
             }
         }
-        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Song details", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text("${track.genre} / ${track.mood}", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("${formatDuration(track.durationSec)} / ${(track.completion * 100).roundToInt()}% complete", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("${track.plays} server plays / ${state.localPlays[track.id] ?: 0} local plays", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(if (state.repeatEnabled) "Repeat queue is on." else "Jarvis DJ is on ${state.djMode.label}. Related music follows when the queue ends.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
         GuestDjModeCard(state.djMode, onDjModeSelected)
         if (state.queue.isNotEmpty()) {
             UpNextSection(state.queue, state.queueIndex, state.liked, state.currentTrack, state.djMode, onTrackSelected, onClearQueue = onClearQueue)
         }
         AutoplayPreviewSection(state, onTrackSelected)
         MixRail("More to play", mixes.take(4), onQueueSelected, onShuffledQueueSelected, onTrackSelected)
+    }
+}
+
+@Composable
+private fun NowPlayingStage(
+    track: Track,
+    bands: List<Float>,
+    isPlaying: Boolean,
+    showVisualizer: Boolean,
+    onToggle: () -> Unit
+) {
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(onClick = onToggle),
+        contentAlignment = Alignment.Center
+    ) {
+        if (showVisualizer) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Brush.radialGradient(coverColors(track.genre)))
+                    .padding(18.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                MusicVisualizer(
+                    bands = bands,
+                    isPlaying = isPlaying,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        } else {
+            AlbumArt(track, size = maxWidth.value.roundToInt())
+        }
     }
 }
 
