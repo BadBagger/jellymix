@@ -393,6 +393,14 @@ class RecommendationTest {
     }
 
     @Test
+    fun previousQueueIndexStopsAtStartUnlessRepeatIsEnabled() {
+        assertEquals(0, previousQueueIndex(currentIndex = 0, queueSize = 3, repeatEnabled = false))
+        assertEquals(1, previousQueueIndex(currentIndex = 2, queueSize = 3, repeatEnabled = false))
+        assertEquals(2, previousQueueIndex(currentIndex = 0, queueSize = 3, repeatEnabled = true))
+        assertEquals(0, previousQueueIndex(currentIndex = 0, queueSize = 1, repeatEnabled = true))
+    }
+
+    @Test
     fun isQueueEndStopsSingleTrackAndLastTrackWithoutRepeat() {
         assertTrue(isQueueEnd(currentIndex = 0, queueSize = 1, repeatEnabled = false))
         assertTrue(isQueueEnd(currentIndex = 2, queueSize = 3, repeatEnabled = false))

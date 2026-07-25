@@ -53,12 +53,14 @@ class PlaybackNotificationController(private val context: Context) {
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setOngoing(state.isPlaying)
             .setOnlyAlertOnce(true)
-            .addAction(notificationAction(playPauseIcon, playPauseLabel, WIDGET_ACTION_PLAY_PAUSE, 1))
-            .addAction(notificationAction(android.R.drawable.ic_media_next, "Skip", WIDGET_ACTION_SKIP, 2))
+            .addAction(notificationAction(android.R.drawable.ic_media_previous, "Previous", WIDGET_ACTION_PREVIOUS, 1))
+            .addAction(notificationAction(playPauseIcon, playPauseLabel, WIDGET_ACTION_PLAY_PAUSE, 2))
+            .addAction(notificationAction(android.R.drawable.ic_media_next, "Skip", WIDGET_ACTION_SKIP, 3))
+            .addAction(notificationAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop", WIDGET_ACTION_STOP, 4))
             .setStyle(
                 Notification.MediaStyle()
                     .setMediaSession(session.sessionToken)
-                    .setShowActionsInCompactView(0, 1)
+                    .setShowActionsInCompactView(0, 1, 2)
             )
             .build()
     }
@@ -79,9 +81,11 @@ class PlaybackNotificationController(private val context: Context) {
             PlaybackState.Builder()
                 .setActions(
                     PlaybackState.ACTION_PLAY or
-                        PlaybackState.ACTION_PAUSE or
+                    PlaybackState.ACTION_PAUSE or
                         PlaybackState.ACTION_PLAY_PAUSE or
-                        PlaybackState.ACTION_SKIP_TO_NEXT
+                        PlaybackState.ACTION_SKIP_TO_PREVIOUS or
+                        PlaybackState.ACTION_SKIP_TO_NEXT or
+                        PlaybackState.ACTION_STOP
                 )
                 .setState(playbackState, 0L, if (state.isPlaying) 1f else 0f)
                 .build()

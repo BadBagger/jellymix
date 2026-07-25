@@ -112,6 +112,8 @@ import org.json.JSONObject
 
 internal const val WIDGET_ACTION_PLAY_PAUSE = "com.smithware.jellymix.widget.PLAY_PAUSE"
 internal const val WIDGET_ACTION_SKIP = "com.smithware.jellymix.widget.SKIP"
+internal const val WIDGET_ACTION_PREVIOUS = "com.smithware.jellymix.widget.PREVIOUS"
+internal const val WIDGET_ACTION_STOP = "com.smithware.jellymix.widget.STOP"
 
 class MainActivity : ComponentActivity() {
     private val viewModel: JellyMixViewModel by viewModels()
@@ -166,6 +168,8 @@ class MainActivity : ComponentActivity() {
         when (intent?.action) {
             WIDGET_ACTION_PLAY_PAUSE -> viewModel.togglePlayPause()
             WIDGET_ACTION_SKIP -> viewModel.skip()
+            WIDGET_ACTION_PREVIOUS -> viewModel.previous()
+            WIDGET_ACTION_STOP -> viewModel.stopPlayback()
         }
     }
 }
@@ -603,6 +607,36 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
 
     fun skip() {
         advanceQueue(countSkip = true, keepPlaying = state.isPlaying)
+    }
+
+    fun previous() {
+        val queue = state.queue.ifEmpty { state.rankedTracks() }
+        val previousIndex = previousQueueIndex(state.queueIndex, queue.size, state.repeatEnabled)
+        val previousTrack = queue.getOrNull(previousIndex) ?: state.currentTrack
+        state = state.copy(
+            currentTrack = previousTrack,
+            queue = queue,
+            queueIndex = previousIndex,
+            queueTitle = if (state.queue.isEmpty()) "Discovery queue" else state.queueTitle,
+            status = "Queued ${previousTrack.title}."
+        )
+        persistPlaybackState()
+        if (state.isPlaying) playCurrentTrack()
+    }
+
+    fun stopPlayback() {
+        player?.stop()
+        player?.release()
+        player = null
+        releaseAudioVisualizer()
+        state = state.copy(
+            isPlaying = false,
+            visualizerBands = restingVisualizerBands(),
+            visualizerMessage = "Visualizer stopped.",
+            status = "Stopped playback."
+        )
+        persistPlaybackState()
+        playbackNotificationController.cancel()
     }
 
     fun clearQueue() {
@@ -2870,6 +2904,16 @@ internal fun nextQueueIndex(currentIndex: Int, queueSize: Int, repeatEnabled: Bo
         next < queueSize -> next
         repeatEnabled -> 0
         else -> queueSize - 1
+    }
+}
+
+internal fun previousQueueIndex(currentIndex: Int, queueSize: Int, repeatEnabled: Boolean): Int {
+    if (queueSize <= 1) return 0
+    val previous = currentIndex - 1
+    return when {
+        previous >= 0 -> previous
+        repeatEnabled -> queueSize - 1
+        else -> 0
     }
 }
 
