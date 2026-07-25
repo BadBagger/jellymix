@@ -32,8 +32,10 @@ Done:
 - Recently played and local play counts persist on-device and influence ranking.
 - Custom theme options exist in the connection/settings card: System, Light, and Dark mode plus Jelly, Ember, Ocean, Grape, and Mono accent palettes. The selections persist locally.
 - An in-app visualizer exists on Home and in the mini player. It uses Android audio-session waveform capture for real Jellyfin playback after `RECORD_AUDIO` permission, and falls back to animated preview bands for demo mode or unavailable capture.
+- The Jellyfin connection card is onboarding-style: it hides after the library actually loads and reappears only when there is no saved session or the saved session fails to load the library.
+- The mini player was reduced to a compact control surface after phone screenshots showed the previous player consumed too much screen space.
 - Recommendation, local play boost, generated mix, search, discovery filter, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, theme preference parsing, and visualizer band tests exist in `app/src/test/java/com/smithware/jellymix/RecommendationTest.kt`.
-- `.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug` passed on July 24, 2026 after the visualizer pass.
+- `.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug` passed on July 24, 2026 after the login/declutter pass.
 
 Not done:
 
@@ -47,6 +49,8 @@ Published:
 - Source repo: `https://github.com/BadBagger/jellymix`
 - Debug test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.0-visualizer-test`
 - DevHub catalog release: `https://github.com/BadBagger/softsmith-devhub/releases/tag/v2.1.88-jellymix`
+- Login/declutter release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.1-login-declutter`
+- Server reachability from the Windows workspace was confirmed for `http://www.badgerflix.win/System/Info/Public` and `https://www.badgerflix.win/System/Info/Public`; both returned BadgerFlix `10.11.11`. Phone-side library loading still needs verification.
 
 ## Immediate Next Blocker
 

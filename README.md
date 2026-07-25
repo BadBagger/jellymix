@@ -37,6 +37,8 @@ What exists:
 - Local play counts persist and influence recommendation ranking.
 - Custom theme options with System/Light/Dark mode and Jelly, Ember, Ocean, Grape, and Mono accent palettes persisted locally.
 - In-app music visualizer on Home and in the mini player, with live Jellyfin audio capture when permission is granted and animated preview bands for demo/unavailable capture.
+- Login is onboarding-style: the Jellyfin connection panel hides after a real library load, and returns only when no session exists or the library did not load.
+- The mini player is compact so library/discovery content remains usable while music is playing.
 - JVM tests for recommendation ranking, local play boosts, generated mixes, search filtering, discovery filters, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, theme preference parsing, and visualizer band generation.
 
 Known remaining blocker:
@@ -93,4 +95,5 @@ Latest copied debug APK size: 22,659,918 bytes.
 
 - Source repo: `https://github.com/BadBagger/jellymix`
 - Debug test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.0-visualizer-test`
+- Login/declutter test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.1-login-declutter`
 - DevHub release that adds JellyMix to the catalog: `https://github.com/BadBagger/softsmith-devhub/releases/tag/v2.1.88-jellymix`

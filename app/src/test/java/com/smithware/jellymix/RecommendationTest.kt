@@ -156,6 +156,31 @@ class RecommendationTest {
     }
 
     @Test
+    fun connectionCardHidesAfterLibraryLoads() {
+        val track = sampleTrack("connected", liked = false, plays = 1, completion = 0.8f)
+        val base = JellyMixState(
+            serverUrl = "https://www.badgerflix.win",
+            username = "user",
+            token = "token",
+            userId = "user-id",
+            tracks = listOf(track),
+            currentTrack = track,
+            jellyfinPlaylists = emptyList(),
+            selectedPlaylistTracks = emptyList(),
+            liked = emptyMap(),
+            skips = emptyMap(),
+            longListens = emptyMap(),
+            localPlays = emptyMap(),
+            recentTrackIds = emptyList()
+        )
+
+        assertTrue(base.shouldShowConnectionCard)
+        assertEquals(false, base.isConnected)
+        assertEquals(false, base.copy(libraryLoaded = true).shouldShowConnectionCard)
+        assertTrue(base.copy(libraryLoaded = true).isConnected)
+    }
+
+    @Test
     fun normalizeServerUrlAddsSchemeAndRejectsInvalidSchemes() {
         assertEquals("http://192.168.1.25:8096", normalizeServerUrl("192.168.1.25:8096/"))
         assertEquals("https://music.local/jellyfin", normalizeServerUrl("https://music.local/jellyfin/"))

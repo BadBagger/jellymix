@@ -73,6 +73,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -95,6 +96,7 @@ import java.io.BufferedReader
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URI
+import java.net.SocketTimeoutException
 import java.net.URL
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -243,11 +245,12 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                     token = session.token,
                     userId = session.userId,
                     password = "",
+                    libraryLoaded = false,
                     status = "Connected. Loading music library..."
                 )
                 loadLibrary()
             }.onFailure { error ->
-                state = state.copy(isLoading = false, status = "Connection failed: ${error.cleanMessage()}")
+                state = state.copy(isLoading = false, libraryLoaded = false, status = "Connection failed: ${error.cleanMessage()}")
             }
         }
     }
@@ -277,6 +280,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 val mergedPlays = tracks.associate { it.id to (state.localPlays[it.id] ?: 0) }
                 state = state.copy(
                     isLoading = false,
+                    libraryLoaded = true,
                     tracks = tracks,
                     currentTrack = tracks.firstOrNull() ?: state.currentTrack,
                     liked = mergedLiked,
@@ -287,11 +291,15 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                     jellyfinPlaylists = library.playlists,
                     selectedPlaylist = null,
                     selectedPlaylistTracks = emptyList(),
-                    status = "Loaded ${tracks.size} tracks and ${library.playlists.size} Jellyfin playlists."
+                    status = "Connected. Loaded ${tracks.size} tracks and ${library.playlists.size} playlists."
                 )
                 persistSignals()
             }.onFailure { error ->
-                state = state.copy(isLoading = false, status = "Library load failed: ${error.cleanMessage()}")
+                state = state.copy(
+                    isLoading = false,
+                    libraryLoaded = false,
+                    status = "Not connected to library: ${error.cleanMessage()}"
+                )
             }
         }
     }
@@ -469,6 +477,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             jellyfinPlaylists = emptyList(),
             selectedPlaylist = null,
             selectedPlaylistTracks = emptyList(),
+            libraryLoaded = false,
             isPlaying = false,
             visualizerBands = restingVisualizerBands(),
             visualizerMessage = "Visualizer preview is active. Enable audio capture for live Jellyfin waveforms.",
@@ -700,6 +709,7 @@ private class JellyfinClient {
 
         val url = buildString {
             append("$serverUrl/Users/$userId/Items?Recursive=true&IncludeItemTypes=Audio")
+            append("&StartIndex=0&Limit=250")
             append("&Fields=Genres,UserData,RunTimeTicks,Album,Artists")
             append("&SortBy=DatePlayed,SortName&SortOrder=Descending")
             if (!musicLibraryId.isNullOrBlank()) append("&ParentId=${Uri.encode(musicLibraryId)}")
@@ -851,10 +861,11 @@ private fun JellyMixApp(
         ) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 140.dp),
+                contentPadding = PaddingValues(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 104.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                item {
+                if (state.shouldShowConnectionCard) {
+                    item {
                     ConnectionCard(
                         state = state,
                         onServerUrlChange = viewModel::setServerUrl,
@@ -866,6 +877,7 @@ private fun JellyMixApp(
                         onThemeModeSelected = viewModel::setThemeMode,
                         onAccentThemeSelected = viewModel::setAccentTheme
                     )
+                    }
                 }
                 when (selectedTab) {
                     Tab.Home -> {
@@ -975,41 +987,60 @@ private fun ConnectionCard(
     onThemeModeSelected: (ThemeMode) -> Unit,
     onAccentThemeSelected: (AccentTheme) -> Unit
 ) {
+    var expanded by remember(state.hasSession) { mutableStateOf(!state.hasSession) }
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Filled.MusicNote, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.width(8.dp))
-                Text("Jellyfin connection", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Column(Modifier.weight(1f)) {
+                    Text("Jellyfin", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(
+                        state.connectionLabel,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (state.isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (state.hasSession) {
+                    Button(onClick = { expanded = !expanded }) {
+                        Text(if (expanded) "Hide" else "Edit")
+                    }
+                }
             }
-            OutlinedTextField(state.serverUrl, onServerUrlChange, label = { Text("Server URL") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(state.username, onUsernameChange, label = { Text("Username") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(
-                value = state.password,
-                onValueChange = onPasswordChange,
-                label = { Text("Password") },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                modifier = Modifier.fillMaxWidth()
-            )
+            if (expanded || !state.hasSession) {
+                OutlinedTextField(state.serverUrl, onServerUrlChange, label = { Text("Server URL") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(state.username, onUsernameChange, label = { Text("Username") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(
+                    value = state.password,
+                    onValueChange = onPasswordChange,
+                    label = { Text("Password") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                 Button(onClick = onConnect, enabled = !state.isLoading, modifier = Modifier.weight(1f)) {
-                    Text(if (state.isConnected) "Reconnect" else "Connect")
+                    Text(if (state.hasSession) "Reconnect" else "Connect")
                 }
-                Button(onClick = onReload, enabled = state.isConnected && !state.isLoading, modifier = Modifier.weight(1f)) {
+                Button(onClick = onReload, enabled = state.hasSession && !state.isLoading, modifier = Modifier.weight(1f)) {
                     Text("Reload")
                 }
             }
-            Button(onClick = onClearSession, enabled = state.isConnected || state.token.isNotBlank(), modifier = Modifier.fillMaxWidth()) {
-                Text("Clear session")
+            if (expanded || !state.hasSession) {
+                Button(onClick = onClearSession, enabled = state.hasSession, modifier = Modifier.fillMaxWidth()) {
+                    Text("Clear session")
+                }
+                ThemeOptions(
+                    themeMode = state.themeMode,
+                    accentTheme = state.accentTheme,
+                    onThemeModeSelected = onThemeModeSelected,
+                    onAccentThemeSelected = onAccentThemeSelected
+                )
             }
-            ThemeOptions(
-                themeMode = state.themeMode,
-                accentTheme = state.accentTheme,
-                onThemeModeSelected = onThemeModeSelected,
-                onAccentThemeSelected = onAccentThemeSelected
-            )
-            Text(state.status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(state.status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -1395,30 +1426,15 @@ private fun PlayerBar(
     modifier: Modifier = Modifier
 ) {
     Surface(tonalElevation = 8.dp, shadowElevation = 8.dp, modifier = modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.padding(start = 12.dp, top = 8.dp, end = 12.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             LinearProgressIndicator(progress = { track.completion.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
             Row(verticalAlignment = Alignment.CenterVertically) {
-                AlbumArt(track, size = 46)
+                AlbumArt(track, size = 38)
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text(track.title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(queueLabel, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-            }
-            MusicVisualizer(
-                bands = visualizerBands,
-                isPlaying = isPlaying,
-                compact = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(28.dp)
-            )
-            Row(
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
                 IconButton(onClick = onShuffle) {
                     Icon(Icons.Filled.Shuffle, contentDescription = "Shuffle", tint = if (shuffleEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -1429,14 +1445,14 @@ private fun PlayerBar(
                     Icon(Icons.Filled.Repeat, contentDescription = "Repeat", tint = if (repeatEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                Button(onClick = onLongListen, modifier = Modifier.weight(1f)) {
-                    Text("Long listen")
-                }
-                Button(onClick = onStartRadio, modifier = Modifier.weight(1f)) {
-                    Text("Start radio")
-                }
-            }
+            MusicVisualizer(
+                bands = visualizerBands,
+                isPlaying = isPlaying,
+                compact = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(16.dp)
+            )
         }
     }
 }
@@ -1542,11 +1558,20 @@ data class JellyMixState(
     val visualizerBands: List<Float> = restingVisualizerBands(),
     val visualizerPermissionGranted: Boolean = false,
     val visualizerMessage: String = "Visualizer preview is active. Enable audio capture for live Jellyfin waveforms.",
+    val libraryLoaded: Boolean = false,
     val isLoading: Boolean = false,
     val isPlaying: Boolean = false,
     val status: String = "Ready. Connect to Jellyfin or explore demo mixes."
 ) {
-    val isConnected: Boolean = token.isNotBlank() && userId.isNotBlank()
+    val hasSession: Boolean = token.isNotBlank() && userId.isNotBlank()
+    val isConnected: Boolean = hasSession && libraryLoaded
+    val shouldShowConnectionCard: Boolean = !hasSession || (!libraryLoaded && !isLoading)
+    val connectionLabel: String = when {
+        isConnected -> "Connected to $serverUrl"
+        hasSession && isLoading -> "Checking $serverUrl"
+        hasSession -> "Saved login, library not loaded"
+        else -> "Sign in once to load Jellyfin music"
+    }
     val queueLabel: String =
         if (queue.isEmpty()) queueTitle else "$queueTitle ${queueIndex + 1}/${queue.size}"
 
@@ -1719,7 +1744,10 @@ private fun moodFromGenre(genre: String): String =
     }
 
 private fun Throwable.cleanMessage(): String =
-    message?.replace('\n', ' ')?.take(180) ?: javaClass.simpleName
+    when (this) {
+        is SocketTimeoutException -> "server timed out. Try Reload, or switch the URL between http and https."
+        else -> message?.replace('\n', ' ')?.take(180) ?: javaClass.simpleName
+    }
 
 internal fun normalizeServerUrl(input: String): String? {
     val trimmed = input.trim().trimEnd('/')
