@@ -117,5 +117,5 @@ Latest copied debug APK size: 22,659,918 bytes.
 - Vibe tab test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.5-vibe-tab`
 - Android Auto test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.6-android-auto`
 - Driving controls test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.7-driving-controls`
-- Home/widget refresh test release: pending
+- Home/widget refresh test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.8-home-widget-refresh`
 - DevHub release that adds JellyMix to the catalog: `https://github.com/BadBagger/softsmith-devhub/releases/tag/v2.1.88-jellymix`
