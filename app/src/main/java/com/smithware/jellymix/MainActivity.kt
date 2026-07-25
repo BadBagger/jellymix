@@ -6,6 +6,7 @@ import android.content.Intent
 import android.media.MediaPlayer
 import android.media.audiofx.Visualizer
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.content.pm.PackageManager
 import androidx.activity.ComponentActivity
@@ -123,12 +124,26 @@ class MainActivity : ComponentActivity() {
             ) { granted ->
                 viewModel.setVisualizerPermission(granted)
             }
+            val notificationPermissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission()
+            ) { granted ->
+                if (granted) viewModel.refreshPlaybackNotification()
+            }
             LaunchedEffect(Unit) {
                 viewModel.setVisualizerPermission(
                     checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
                 )
             }
             val state = viewModel.state
+            LaunchedEffect(state.isPlaying) {
+                if (
+                    state.isPlaying &&
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }
             JellyMixTheme(themeMode = state.themeMode, accentTheme = state.accentTheme) {
                 JellyMixApp(
                     viewModel = viewModel,
@@ -162,6 +177,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     private var visualizer: Visualizer? = null
     private var lastVisualizerUpdateMs = 0L
     private val appContext = application.applicationContext
+    private val playbackNotificationController = PlaybackNotificationController(appContext)
 
     var state by mutableStateOf(
         run {
@@ -256,6 +272,10 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         if (granted && state.isPlaying && !state.currentTrack.id.startsWith("sample-")) {
             player?.audioSessionId?.takeIf { it != 0 }?.let(::startAudioVisualizer)
         }
+    }
+
+    fun refreshPlaybackNotification() {
+        playbackNotificationController.update(state)
     }
 
     fun connect() {
@@ -612,6 +632,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             .remove("djMode")
             .remove("isPlaying")
             .apply()
+        playbackNotificationController.cancel()
         state = state.copy(
             token = "",
             userId = "",
@@ -863,6 +884,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             .putBoolean("isPlaying", state.isPlaying)
             .apply()
         JellyMixWidgetProvider.updateAll(getApplication())
+        playbackNotificationController.update(state)
     }
 
     private fun persistCachedLibrary(tracks: List<Track>, playlists: List<JellyfinPlaylist>) {
@@ -890,6 +912,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     override fun onCleared() {
         player?.release()
         player = null
+        playbackNotificationController.release()
         super.onCleared()
     }
 }

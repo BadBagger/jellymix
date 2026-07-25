@@ -51,6 +51,7 @@ What exists:
 - In-app music visualizer in Now Playing and in the mini player, with live Jellyfin audio capture when permission is granted and animated preview bands for demo/unavailable capture.
 - Now Playing uses larger driving-friendly transport controls with a prominent play/pause button and clearer active states for shuffle, like, and repeat.
 - Android home-screen widget is included. It shows the current track, artist, Jellyfin context, and routed play/pause and skip controls that open JellyMix through the existing playback path.
+- Lock-screen/media notification controls are included with a media-style notification, playback `MediaSession`, public lock-screen visibility, and Play/Pause plus Skip actions routed through the existing playback path.
 - Login is onboarding-style: the Jellyfin connection panel hides after a real library load, and returns only when no session exists or the library did not load.
 - The mini player is compact so library/discovery content remains usable while music is playing.
 - JVM tests for recommendation ranking, local play boosts, generated mixes, vibe playlist search/ranking, Jarvis DJ prompt/mode handling, Android Auto browse catalog entries and car queue selection, autoplay queue behavior, search filtering, discovery filters, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, cached library parsing, image tag detection, theme preference parsing, and visualizer band generation.
@@ -119,4 +120,5 @@ Latest copied debug APK size: 22,659,918 bytes.
 - Driving controls test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.7-driving-controls`
 - Home/widget refresh test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.8-home-widget-refresh`
 - Functional widget controls test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.9-widget-controls`
+- Lock-screen controls test release: pending
 - DevHub release that adds JellyMix to the catalog: `https://github.com/BadBagger/softsmith-devhub/releases/tag/v2.1.88-jellymix`
