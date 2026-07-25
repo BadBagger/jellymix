@@ -62,6 +62,33 @@ class RecommendationTest {
     }
 
     @Test
+    fun generatedMixesAreLongerAndArtistDiverse() {
+        val tracks = (0 until 48).map { index ->
+            sampleTrack("mix-$index", liked = index % 4 == 0, plays = 20 - (index % 10), completion = 0.9f - (index % 5) * 0.04f)
+                .copy(
+                    artist = "Artist ${index % 8}",
+                    album = "Album ${index % 12}",
+                    genre = if (index % 2 == 0) "Rock" else "Indie",
+                    mood = if (index % 3 == 0) "Drive" else "Warm"
+                )
+        }
+
+        val mixes = buildMixes(
+            rankedTracks = tracks,
+            liked = tracks.associate { it.id to it.liked },
+            longListens = emptyMap(),
+            skips = emptyMap(),
+            localPlays = emptyMap()
+        )
+        val quickShuffle = mixes.first { it.name == "Quick Shuffle" }
+        val heavyRotation = mixes.first { it.name == "Heavy Rotation" }
+
+        assertTrue(quickShuffle.tracks.size >= 30)
+        assertTrue(heavyRotation.tracks.size >= 30)
+        assertTrue(quickShuffle.tracks.take(8).zipWithNext().none { (left, right) -> left.artist == right.artist })
+    }
+
+    @Test
     fun filterTracksMatchesArtistAlbumGenreAndMood() {
         val tracks = listOf(
             sampleTrack("1", liked = true, plays = 10, completion = 0.9f),
@@ -169,6 +196,31 @@ class RecommendationTest {
 
         assertEquals("seed", queue.first().id)
         assertTrue(queue.indexOf(deepCut) < queue.indexOf(obvious))
+    }
+
+    @Test
+    fun guestDjDiscoveryRotatesArtists() {
+        val tracks = (0 until 30).map { index ->
+            sampleTrack("dj-$index", liked = index % 5 == 0, plays = index % 6, completion = 0.8f)
+                .copy(
+                    artist = if (index < 10) "Stacked Artist" else "Artist ${index % 7}",
+                    mood = "Drive",
+                    genre = "Rock"
+                )
+        }
+        val queue = buildGuestDjQueue(
+            mode = GuestDjMode.Discovery,
+            seed = tracks.first(),
+            tracks = tracks,
+            liked = emptyMap(),
+            longListens = emptyMap(),
+            skips = emptyMap(),
+            localPlays = emptyMap(),
+            recentlyPlayedIds = emptyList()
+        )
+
+        assertTrue(queue.size >= 25)
+        assertTrue(queue.take(8).zipWithNext().none { (left, right) -> left.artist == right.artist })
     }
 
     @Test

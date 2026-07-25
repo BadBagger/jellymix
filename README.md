@@ -25,7 +25,7 @@ What exists:
 - Search across songs, artists, albums, genres, and moods.
 - Actionable discovery filters for long listens, liked tracks, low skips, similar mood, and rediscovery.
 - Empty states for filtered track lists.
-- Generated mixes now include Heavy Rotation, Long Listens, Rediscover, Liked Radio, genre radio, and mood flow.
+- Generated mixes now include longer Heavy Rotation, Long Listens, Rediscover, Liked Radio, genre radio, mood flow, and Quick Shuffle queues with artist rotation to avoid long one-artist blocks.
 - Curated playlist shelves now include Weekly Discovery and Quick Shuffle alongside personalized radio-style mixes.
 - Mix and playlist queue start actions.
 - Explicit Play and Shuffle controls exist on curated mixes, generated playlist cards, and the full library.
@@ -48,10 +48,10 @@ What exists:
 - Recently played section backed by local play history.
 - Local play counts persist and influence recommendation ranking.
 - Custom theme options with System/Light/Dark mode and Jelly, Ember, Ocean, Grape, and Mono accent palettes persisted locally.
-- In-app music visualizer in Now Playing and in the mini player, with live Jellyfin audio capture when permission is granted and animated preview bands for demo/unavailable capture.
+- In-app music visualizer in Now Playing and in the mini player, with live Jellyfin audio capture when permission is granted and song-shaped preview bands based on track, genre, mood, and completion when live capture is unavailable.
 - Now Playing hides the mini player while open, removes low-value song-detail clutter, and uses larger driving-friendly transport controls with a prominent play/pause button plus clearer active states for shuffle, like, and repeat.
 - Android home-screen widget is included. It shows the current track, artist, Jellyfin context, and play/pause plus skip controls. The widget background opens JellyMix, but the playback buttons dispatch foreground-service commands instead of launching the app.
-- Lock-screen/media notification controls are included with a media-style notification, playback `MediaSession`, public lock-screen visibility, and Previous, Play/Pause, Skip, and Stop actions routed through private playback commands instead of activity launches.
+- Lock-screen/media notification controls are included with a media-style notification, playback `MediaSession`, public lock-screen visibility, and Previous, Play/Pause, Skip, and Stop actions routed through foreground-safe private playback commands instead of activity launches.
 - Login is onboarding-style: the Jellyfin connection panel hides after a real library load, and returns only when no session exists or the library did not load.
 - The mini player is compact so library/discovery content remains usable while music is playing.
 - JVM tests for recommendation ranking, local play boosts, generated mixes, vibe playlist search/ranking, Jarvis DJ prompt/mode handling, Android Auto browse catalog entries and car queue selection, autoplay queue behavior, search filtering, discovery filters, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, cached library parsing, image tag detection, theme preference parsing, and visualizer band generation.

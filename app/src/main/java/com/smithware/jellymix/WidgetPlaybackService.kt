@@ -29,12 +29,13 @@ class WidgetPlaybackService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        refreshState()
+        startWidgetForeground()
         if (WidgetPlaybackBridge.dispatch(intent?.action)) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
         }
-        refreshState()
-        startWidgetForeground()
         when (intent?.action) {
             WIDGET_ACTION_PLAY_PAUSE -> togglePlayback()
             WIDGET_ACTION_SKIP -> skip()

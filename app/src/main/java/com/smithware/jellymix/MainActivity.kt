@@ -1654,9 +1654,9 @@ private fun MusicVisualizer(
         val barWidth = ((size.width - gap * (count - 1)) / count).coerceAtLeast(2.dp.toPx())
         sourceBands.forEachIndexed { index, band ->
             val pulse = if (isPlaying) {
-                0.74f + 0.26f * sin((phase * 6.28318f) + index * 0.61f)
+                0.88f + 0.12f * sin((phase * 6.28318f) + sourceBands[index] * 4.2f + index * 0.19f)
             } else {
-                0.26f
+                0.32f
             }
             val normalized = (band * pulse).coerceIn(0.06f, 1f)
             val barHeight = size.height * normalized
@@ -1856,7 +1856,7 @@ private fun MixArtwork(mix: Mix) {
     val tracks = mix.tracks.take(4)
     Box(
         modifier = Modifier
-            .fillMaxWidth()
+            .size(126.dp)
             .height(126.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
@@ -2631,42 +2631,44 @@ internal fun buildMixes(
     localPlays: Map<String, Int> = emptyMap(),
     recentTracks: List<Track> = emptyList()
 ): List<Mix> {
+    val mixLength = 36
+    val shortMixLength = 30
     val weeklyDiscoveryTracks = rankedTracks
         .filter { liked[it.id] != true && it.id !in recentTracks.map { recent -> recent.id } }
         .sortedByDescending {
             recommendationScore(it, false, longListens[it.id] ?: 0, skips[it.id] ?: 0, localPlays[it.id] ?: 0) +
                 if (it.completion >= 0.75f) 12f else 0f
         }
-        .take(18)
-    val longListenTracks = rankedTracks.sortedByDescending { it.durationSec + ((longListens[it.id] ?: 0) * 120) }.take(12)
-    val likedTracks = rankedTracks.filter { liked[it.id] == true }.take(12)
-    val rediscoverTracks = rankedTracks.sortedWith(compareBy<Track> { it.plays }.thenByDescending { it.completion }).take(12)
+        .artistDiverseTake(mixLength)
+    val longListenTracks = rankedTracks.sortedByDescending { it.durationSec + ((longListens[it.id] ?: 0) * 120) }.artistDiverseTake(shortMixLength)
+    val likedTracks = rankedTracks.filter { liked[it.id] == true }.artistDiverseTake(shortMixLength)
+    val rediscoverTracks = rankedTracks.sortedWith(compareBy<Track> { it.plays }.thenByDescending { it.completion }).artistDiverseTake(shortMixLength)
     val quickShuffleTracks = rankedTracks
         .filter { (skips[it.id] ?: it.skipped) <= 2 }
-        .shuffled()
-        .take(18)
+        .stableShuffleBy("quick-shuffle")
+        .artistDiverseTake(40)
     val strongestGenre = likedTracks
         .groupingBy { it.genre }
         .eachCount()
         .maxByOrNull { it.value }
         ?.key
-    val genreTracks = strongestGenre?.let { genre -> rankedTracks.filter { it.genre == genre }.take(12) }.orEmpty()
+    val genreTracks = strongestGenre?.let { genre -> rankedTracks.filter { it.genre == genre }.artistDiverseTake(shortMixLength) }.orEmpty()
     val strongestMood = rankedTracks
         .filter { (longListens[it.id] ?: 0) > 0 || liked[it.id] == true }
         .groupingBy { it.mood }
         .eachCount()
         .maxByOrNull { it.value }
         ?.key
-    val moodTracks = strongestMood?.let { mood -> rankedTracks.filter { it.mood == mood }.take(12) }.orEmpty()
+    val moodTracks = strongestMood?.let { mood -> rankedTracks.filter { it.mood == mood }.artistDiverseTake(shortMixLength) }.orEmpty()
     return listOf(
-        Mix("Weekly Discovery", "Fresh picks from your library based on completions, likes, and low skips.", weeklyDiscoveryTracks.ifEmpty { rankedTracks.take(12) }),
-        Mix("Heavy Rotation", "High completion, likes, and repeat plays.", rankedTracks.take(12)),
+        Mix("Weekly Discovery", "Fresh picks from your library based on completions, likes, and low skips.", weeklyDiscoveryTracks.ifEmpty { rankedTracks.artistDiverseTake(shortMixLength) }),
+        Mix("Heavy Rotation", "High completion, likes, and repeat plays.", rankedTracks.artistDiverseTake(shortMixLength)),
         Mix("Long Listen Mix", "Songs you finish or keep around the longest.", longListenTracks),
-        Mix("Quick Shuffle", "A loose station of familiar tracks that usually survive skips.", quickShuffleTracks.ifEmpty { rankedTracks.shuffled().take(12) }),
+        Mix("Quick Shuffle", "A loose station of familiar tracks that usually survive skips.", quickShuffleTracks.ifEmpty { rankedTracks.stableShuffleBy("quick-shuffle-fallback").artistDiverseTake(shortMixLength) }),
         Mix("Rediscover", "Lower-play tracks with signals worth another shot.", rediscoverTracks),
-        Mix("Liked Radio", "A focused queue from your strongest favorites.", likedTracks.ifEmpty { rankedTracks.take(6) }),
-        Mix("${strongestGenre ?: "Library"} Radio", "More from the sound you favor most.", genreTracks.ifEmpty { rankedTracks.take(6) }),
-        Mix("${strongestMood ?: "Mood"} Flow", "A queue shaped by your current listening mood.", moodTracks.ifEmpty { rankedTracks.take(6) })
+        Mix("Liked Radio", "A focused queue from your strongest favorites.", likedTracks.ifEmpty { rankedTracks.artistDiverseTake(24) }),
+        Mix("${strongestGenre ?: "Library"} Radio", "More from the sound you favor most.", genreTracks.ifEmpty { rankedTracks.artistDiverseTake(24) }),
+        Mix("${strongestMood ?: "Mood"} Flow", "A queue shaped by your current listening mood.", moodTracks.ifEmpty { rankedTracks.artistDiverseTake(24) })
     )
 }
 
@@ -2712,7 +2714,7 @@ internal fun buildVibeMixes(
         }
     }
     return profiles.mapNotNull { profile ->
-        val ranked = rankTracksForVibe(tracks, profile, normalized, liked, longListens, localPlays).take(18)
+        val ranked = rankTracksForVibe(tracks, profile, normalized, liked, longListens, localPlays).artistDiverseTake(30)
         if (ranked.isEmpty()) null else Mix("${profile.name} Vibe", profile.reason, ranked)
     }
 }
@@ -2796,7 +2798,7 @@ internal fun buildTrackRadio(
                 localPlays = localPlays[track.id] ?: 0
             )
     }
-    return (listOf(seed) + ranked).distinctBy { it.id }.take(25)
+    return (listOf(seed) + ranked.artistDiverseTake(49)).distinctBy { it.id }.take(50)
 }
 
 internal fun buildGuestDjQueue(
@@ -2840,7 +2842,12 @@ internal fun buildGuestDjQueue(
         }
         base + continuity + modeBoost
     }
-    return ranked.distinctBy { it.id }.take(30)
+    val queue = ranked.distinctBy { it.id }
+    return if (mode == GuestDjMode.ArtistFocus) {
+        queue.take(50)
+    } else {
+        queue.artistDiverseTake(50)
+    }
 }
 
 internal fun buildJarvisDjQueue(
@@ -2860,7 +2867,7 @@ internal fun buildJarvisDjQueue(
         .map { it.trim().lowercase() }
         .filter { it.length >= 4 }
         .toSet()
-    return base.sortedByDescending { track ->
+    val promptedQueue = base.sortedByDescending { track ->
         val text = "${track.title} ${track.artist} ${track.album} ${track.genre} ${track.mood}".lowercase()
         val promptMatch = terms.count { it in text } * 18f
         val lessPenalty = if (lowered.contains("less") || lowered.contains("don't") || lowered.contains("dont")) {
@@ -2869,7 +2876,12 @@ internal fun buildJarvisDjQueue(
             0f
         }
         promptMatch + lessPenalty + if (track.id == seed.id) 20f else 0f
-    }.distinctBy { it.id }.take(30)
+    }.distinctBy { it.id }
+    return if (mode == GuestDjMode.ArtistFocus) {
+        promptedQueue.take(50)
+    } else {
+        promptedQueue.artistDiverseTake(50)
+    }
 }
 
 internal fun inferGuestDjMode(prompt: String, fallback: GuestDjMode): GuestDjMode {
@@ -2939,8 +2951,44 @@ internal fun buildAutoplayQueue(
                 localPlays = localPlays[track.id] ?: 0
             )
         }
-    return ranked.ifEmpty { tracks.filterNot { it.id == seed.id } }.take(25)
+    return ranked.ifEmpty { tracks.filterNot { it.id == seed.id } }.artistDiverseTake(50)
 }
+
+private fun List<Track>.artistDiverseTake(maxCount: Int): List<Track> {
+    if (maxCount <= 0) return emptyList()
+    val distinctTracks = distinctBy { it.id }
+    if (distinctTracks.size <= 2) return distinctTracks.take(maxCount)
+    val grouped = distinctTracks
+        .groupBy { it.artist.ifBlank { "Unknown Artist" } }
+        .mapValues { (_, tracks) -> ArrayDeque(tracks) }
+        .toMutableMap()
+    val artistOrder = grouped.keys.toMutableList()
+    val result = mutableListOf<Track>()
+    var lastArtist: String? = null
+    while (result.size < maxCount && grouped.isNotEmpty()) {
+        val nextArtist = artistOrder.firstOrNull { artist ->
+            artist != lastArtist && grouped[artist]?.isNotEmpty() == true
+        } ?: artistOrder.firstOrNull { artist -> grouped[artist]?.isNotEmpty() == true } ?: break
+        val nextTrack = grouped[nextArtist]?.removeFirstOrNull() ?: break
+        result += nextTrack
+        lastArtist = nextArtist
+        if (grouped[nextArtist]?.isEmpty() == true) {
+            grouped.remove(nextArtist)
+            artistOrder.remove(nextArtist)
+        } else {
+            artistOrder.remove(nextArtist)
+            artistOrder.add(nextArtist)
+        }
+    }
+    return result
+}
+
+private fun List<Track>.stableShuffleBy(seed: String): List<Track> =
+    sortedWith(
+        compareBy<Track> {
+            "${seed}:${it.id}:${it.title}:${it.artist}".hashCode()
+        }.thenBy { it.title }
+    )
 
 internal fun nextQueueIndex(currentIndex: Int, queueSize: Int, repeatEnabled: Boolean): Int {
     if (queueSize <= 1) return 0
@@ -3116,12 +3164,30 @@ internal fun restingVisualizerBands(bandCount: Int = 28): List<Float> =
 internal fun syntheticVisualizerBands(track: Track, bandCount: Int = 28): List<Float> {
     val seed = "${track.id}-${track.title}-${track.artist}-${track.genre}-${track.mood}"
         .fold(0) { acc, char -> (acc * 31) + char.code }
+    val moodEnergy = when (track.mood.lowercase()) {
+        "loud", "drive", "bright", "focused" -> 0.24f
+        "late" -> 0.14f
+        "calm", "warm" -> -0.08f
+        else -> 0.04f
+    }
+    val genreShape = when (track.genre.lowercase()) {
+        "rock", "metal", "punk" -> 3
+        "electronic", "synth", "dance" -> 4
+        "ambient", "classical", "jazz" -> 7
+        "hip hop", "rap" -> 5
+        else -> 6
+    }
+    val completionLift = track.completion.coerceIn(0f, 1f) * 0.12f
     return List(bandCount) { index ->
-        val wave = abs(sin((seed + index * 37).toFloat() * 0.017f))
-        val rhythm = if (index % 4 == 0) 0.28f else 0f
-        (0.18f + wave * 0.58f + rhythm).coerceIn(0.08f, 1f)
+        val phrase = abs(sin((seed + index * 37).toFloat() * 0.011f))
+        val beat = if ((index + seed).floorMod(genreShape) == 0) 0.26f else 0f
+        val lowEnd = if (index < bandCount / 4 && track.genre.lowercase() in setOf("rock", "electronic", "synth", "hip hop", "rap")) 0.16f else 0f
+        (0.16f + moodEnergy + completionLift + phrase * 0.42f + beat + lowEnd).coerceIn(0.08f, 1f)
     }
 }
+
+private fun Int.floorMod(other: Int): Int =
+    ((this % other) + other) % other
 
 internal fun Map<String, *>.toStorageString(): String =
     entries.joinToString(";") { "${it.key}=${it.value}" }
