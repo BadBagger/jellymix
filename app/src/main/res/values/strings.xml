@@ -1,0 +1,5 @@
+<resources>
+    <string name="widget_artwork">JellyMix artwork</string>
+    <string name="widget_description">JellyMix current music widget</string>
+    <string name="widget_play">▶</string>
+</resources>

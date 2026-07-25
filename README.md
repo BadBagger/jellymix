@@ -32,6 +32,7 @@ What exists:
 - Queue-aware skip, queue position display, shuffle toggle, and repeat-queue toggle.
 - Playback completion advances through the active queue, then starts an autoplay radio queue instead of stopping or looping the same song.
 - Home now leads with album art, current playback, curated mix shelves, recently played, and heavy rotation instead of connection/search/status panels.
+- Home now takes stronger inspiration from modern music apps with mood chips, a speed-dial mix grid, full-cover discovery tiles, and mixed-for-you rails.
 - Album art is loaded from Jellyfin track or album primary images across rows, mix shelves, Now Playing, and the mini player. Generated covers are always painted underneath so broken/missing Jellyfin art never leaves blank slabs.
 - The last loaded Jellyfin library and playlist list are cached locally so saved-session launches can show and play music immediately while Jellyfin refreshes in the background.
 - Tapping the mini player opens a Now Playing page with larger art, visualizer, controls, song details, queue context, and more mixes.
@@ -49,6 +50,7 @@ What exists:
 - Custom theme options with System/Light/Dark mode and Jelly, Ember, Ocean, Grape, and Mono accent palettes persisted locally.
 - In-app music visualizer in Now Playing and in the mini player, with live Jellyfin audio capture when permission is granted and animated preview bands for demo/unavailable capture.
 - Now Playing uses larger driving-friendly transport controls with a prominent play/pause button and clearer active states for shuffle, like, and repeat.
+- Android home-screen widget is included. It shows the current track, artist, Jellyfin context, and a large launch/play affordance that opens JellyMix.
 - Login is onboarding-style: the Jellyfin connection panel hides after a real library load, and returns only when no session exists or the library did not load.
 - The mini player is compact so library/discovery content remains usable while music is playing.
 - JVM tests for recommendation ranking, local play boosts, generated mixes, vibe playlist search/ranking, Jarvis DJ prompt/mode handling, Android Auto browse catalog entries and car queue selection, autoplay queue behavior, search filtering, discovery filters, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, cached library parsing, image tag detection, theme preference parsing, and visualizer band generation.
@@ -115,4 +117,5 @@ Latest copied debug APK size: 22,659,918 bytes.
 - Vibe tab test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.5-vibe-tab`
 - Android Auto test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.6-android-auto`
 - Driving controls test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.7-driving-controls`
+- Home/widget refresh test release: pending
 - DevHub release that adds JellyMix to the catalog: `https://github.com/BadBagger/softsmith-devhub/releases/tag/v2.1.88-jellymix`

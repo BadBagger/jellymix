@@ -223,6 +223,7 @@ class CarPlaybackService : MediaBrowserService() {
             .putString("recentTrackIds", recent.take(30).joinToString(","))
             .putString("localPlays", (localPlays + (track.id to ((localPlays[track.id] ?: 0) + 1))).toStorageString())
             .apply()
+        JellyMixWidgetProvider.updateAll(this)
     }
 
     private fun refreshTracks() {

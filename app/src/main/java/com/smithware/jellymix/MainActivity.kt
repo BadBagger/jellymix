@@ -820,6 +820,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             .putString("queueTitle", state.queueTitle)
             .putString("djMode", state.djMode.name)
             .apply()
+        JellyMixWidgetProvider.updateAll(getApplication())
     }
 
     private fun persistCachedLibrary(tracks: List<Track>, playlists: List<JellyfinPlaylist>) {
@@ -1087,6 +1088,8 @@ private fun JellyMixApp(
                     }
                 } else when (selectedTab) {
                     Tab.Home -> {
+                        item { HomeMoodChips(state.vibeQuery, viewModel::setVibeQuery) }
+                        item { SpeedDialGrid(mixes.take(8), viewModel::startQueue) }
                         item {
                             HomeNowCard(
                                 state = state,
@@ -1095,8 +1098,8 @@ private fun JellyMixApp(
                                 onStartRadio = viewModel::startRadioFromCurrent
                             )
                         }
-                        item { MixRail("Curated for you", mixes.take(4), viewModel::startQueue, viewModel::startShuffledQueue, viewModel::selectTrack) }
-                        item { MixRail("Stations and discovery", mixes.drop(4), viewModel::startQueue, viewModel::startShuffledQueue, viewModel::selectTrack) }
+                        item { MixRail("Mixed for you", mixes.take(4), viewModel::startQueue, viewModel::startShuffledQueue, viewModel::selectTrack) }
+                        item { MixRail("Fresh finds, old favorites", mixes.drop(4), viewModel::startQueue, viewModel::startShuffledQueue, viewModel::selectTrack) }
                         if (recentTracks.isNotEmpty()) {
                             item { TrackRail("Recently played", recentTracks.take(10), viewModel::selectTrack) }
                         }
@@ -1185,6 +1188,99 @@ private fun JellyMixApp(
                 onOpenNowPlaying = { showNowPlaying = true },
                 modifier = Modifier.align(Alignment.BottomCenter)
             )
+        }
+    }
+}
+
+@Composable
+private fun HomeMoodChips(selected: String, onSelected: (String) -> Unit) {
+    val chips = listOf("Energize", "Feel good", "Workout", "Focus", "Late night", "Chill")
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(chips) { chip ->
+            FilterChip(
+                selected = selected.equals(chip, ignoreCase = true),
+                onClick = { onSelected(chip) },
+                label = { Text(chip) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun SpeedDialGrid(
+    mixes: List<Mix>,
+    onQueueSelected: (String, List<Track>) -> Unit
+) {
+    val rows = mixes.take(8).chunked(4)
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("Speed dial", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
+        rows.forEach { rowMixes ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                rowMixes.forEach { mix ->
+                    SpeedDialTile(
+                        mix = mix,
+                        onClick = { onQueueSelected(mix.name, mix.tracks) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                repeat(4 - rowMixes.size) {
+                    Spacer(Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SpeedDialTile(
+    mix: Mix,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier.clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(104.dp)
+        ) {
+            mix.tracks.firstOrNull()?.let { track ->
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .background(Brush.linearGradient(coverColors(track.genre)))
+                )
+                track.imageUrl?.let { imageUrl ->
+                    AsyncImage(
+                        model = imageUrl,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.matchParentSize()
+                    )
+                }
+            } ?: Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .background(Color.Black.copy(alpha = 0.48f))
+                    .padding(horizontal = 6.dp, vertical = 5.dp)
+            ) {
+                Text(
+                    mix.name,
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
     }
 }
