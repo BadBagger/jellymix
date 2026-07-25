@@ -37,6 +37,8 @@ Done:
 - Jarvis DJ is implemented as a local conversational radio coordinator. It accepts free-form prompts and quick suggestions, infers Guest DJ modes, rebuilds the queue, persists the active mode/current queue/current track, and explains upcoming track reasons without sending listening data to a cloud service.
 - Guest DJ modes include Flow, Familiar, Discovery, Deep cuts, Artist focus, High energy, and Chill. Now Playing includes DJ mode controls and an autoplay preview with queue reasons.
 - Vibe tab is implemented for emotion/activity playlist search. It supports preset vibes like Chill, Hype, Sad, Angry, Focus, Late Night, Happy, Nostalgic, Workout, and Rainy, and custom metadata searches that build playable vibe mixes.
+- Android Auto media integration is implemented with a platform `MediaBrowserService` and `MediaSession`. It exposes Curated, Vibes, Jarvis DJ, and Library browse roots, playable track queues, transport controls, Jellyfin stream playback, local play-history updates, and autoplay continuation when a car-started queue ends.
+- Apple CarPlay is documented as a separate iOS app requirement because this Android app cannot directly integrate with CarPlay or request Apple's CarPlay entitlement.
 - Recently played and local play counts persist on-device and influence ranking.
 - Custom theme options exist in the connection/settings card: System, Light, and Dark mode plus Jelly, Ember, Ocean, Grape, and Mono accent palettes. The selections persist locally.
 - An in-app visualizer exists in Now Playing and in the mini player. It uses Android audio-session waveform capture for real Jellyfin playback after `RECORD_AUDIO` permission, and falls back to animated preview bands for demo mode or unavailable capture.
@@ -50,7 +52,7 @@ Not done:
 - Emulator install and launch verification passed on `Smithware_Test_Device` for the debug build.
 - No real Jellyfin server login/playback test has been run yet.
 - Live visualizer capture has not been verified on a real device/server.
-- Background media session controls and lock-screen controls are not implemented yet.
+- Lock-screen notification controls are not implemented yet.
 
 Published:
 
@@ -62,6 +64,7 @@ Published:
 - Artwork/startup release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.3-artwork-startup`
 - Jarvis DJ release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.4-jarvis-dj`
 - Vibe tab release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.5-vibe-tab`
+- Android Auto release: pending
 - Server reachability from the Windows workspace was confirmed for `http://www.badgerflix.win/System/Info/Public` and `https://www.badgerflix.win/System/Info/Public`; both returned BadgerFlix `10.11.11`. Phone-side library loading still needs verification.
 
 ## Immediate Next Blocker
@@ -71,7 +74,7 @@ Verify and harden real Jellyfin behavior:
 - Install the debug APK on a device/emulator.
 - Connect to a real Jellyfin server.
 - Confirm auth, library load, stream URL playback, and clear error messages.
-- Add Android media session/background controls after foreground playback is reliable.
+- Add lock-screen notification controls after Android Auto playback is verified.
 
 ## Recommended Architecture
 
@@ -79,7 +82,8 @@ Verify and harden real Jellyfin behavior:
 - State: ViewModel with immutable UI state.
 - Storage: DataStore for server/settings, Room for listening history and cached library metadata.
 - Network: Jellyfin REST API client, keeping credentials local.
-- Playback: Android media playback surface after API/library proof works.
+- Playback: Android media playback surface with Android Auto service; lock-screen notification controls still need a follow-up.
+- Car integration: Android Auto uses `CarPlaybackService`; Apple CarPlay requires a separate iOS implementation and entitlement.
 - Personalization: local ranking engine using listening events.
 
 ## MVP Definition

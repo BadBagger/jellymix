@@ -226,6 +226,58 @@ class RecommendationTest {
     }
 
     @Test
+    fun carBrowseRootExposesDiscoverySurfaces() {
+        val root = buildCarBrowseEntries(
+            parentId = CAR_ROOT_ID,
+            tracks = listOf(sampleTrack("one", liked = true, plays = 4, completion = 0.8f))
+        )
+
+        assertEquals(listOf(CAR_CURATED_ID, CAR_VIBES_ID, CAR_JARVIS_ID, CAR_LIBRARY_ID), root.map { it.id })
+        assertTrue(root.none { it.playable })
+    }
+
+    @Test
+    fun carBrowseVibesAndJarvisReturnPlayableQueues() {
+        val calm = sampleTrack("calm", liked = false, plays = 1, completion = 0.6f).copy(mood = "Calm", genre = "Ambient")
+        val loud = sampleTrack("loud", liked = true, plays = 20, completion = 0.95f).copy(mood = "Loud", genre = "Rock")
+
+        val vibes = buildCarBrowseEntries(
+            parentId = CAR_VIBES_ID,
+            tracks = listOf(loud, calm),
+            liked = mapOf("loud" to true)
+        )
+        val chillTracks = buildCarBrowseEntries(
+            parentId = vibes.first { it.title == "Chill Vibe" }.id,
+            tracks = listOf(loud, calm),
+            liked = mapOf("loud" to true)
+        )
+        val jarvisTracks = buildCarBrowseEntries(
+            parentId = CAR_JARVIS_ID,
+            tracks = listOf(loud, calm),
+            seed = calm,
+            djMode = GuestDjMode.Chill
+        )
+
+        assertTrue(chillTracks.isNotEmpty())
+        assertTrue(chillTracks.all { it.playable })
+        assertTrue(jarvisTracks.isNotEmpty())
+        assertTrue(jarvisTracks.all { it.id.startsWith(CAR_TRACK_PREFIX) })
+    }
+
+    @Test
+    fun carQueueForTrackStartsRadioFromSelectedSong() {
+        val seed = sampleTrack("seed", liked = true, plays = 10, completion = 0.9f).copy(mood = "Late", genre = "Synth")
+        val similar = sampleTrack("similar", liked = false, plays = 1, completion = 0.5f).copy(mood = "Late", genre = "Synth")
+
+        val queue = queueForCarMediaId(
+            mediaId = carTrackId(seed.id),
+            tracks = listOf(similar, seed)
+        )
+
+        assertEquals(listOf("seed", "similar"), queue.map { it.id })
+    }
+
+    @Test
     fun customVibeSearchFallsBackToMetadata() {
         val rainy = sampleTrack("rain", liked = false, plays = 1, completion = 0.6f).copy(title = "Rain Window", mood = "Warm", genre = "Indie")
         val other = sampleTrack("other", liked = true, plays = 20, completion = 0.95f).copy(title = "Sun Run", mood = "Drive", genre = "Rock")

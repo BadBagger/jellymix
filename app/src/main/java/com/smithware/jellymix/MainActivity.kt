@@ -2309,7 +2309,7 @@ private data class JellyfinLibraryLoad(val tracks: List<Track>, val playlists: L
 
 data class JellyfinServerInfo(val serverName: String, val version: String)
 
-private val sampleTracks = listOf(
+internal val sampleTracks = listOf(
     Track("sample-1", "Night Drive Home", "Glass Harbor", "After Hours", "Synth", "Late", 238, 18, 0.96f, 1, true),
     Track("sample-2", "Cloudbreak", "Mara Vale", "Soft Focus", "Indie", "Calm", 204, 13, 0.92f, 0, true),
     Track("sample-3", "Static Bloom", "Northline", "Signal Path", "Alternative", "Focused", 248, 7, 0.84f, 2, false),
