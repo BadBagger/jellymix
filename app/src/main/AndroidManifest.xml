@@ -28,6 +28,7 @@
         <service
             android:name=".CarPlaybackService"
             android:exported="true"
+            android:foregroundServiceType="mediaPlayback"
             android:permission="android.permission.BIND_MEDIA_BROWSER_SERVICE">
             <intent-filter>
                 <action android:name="android.media.browse.MediaBrowserService" />
