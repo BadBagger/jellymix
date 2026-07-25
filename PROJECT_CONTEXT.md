@@ -17,7 +17,7 @@ Done:
 - A JellyMix Compose theme file exists under `app/src/main/java/com/smithware/jellymix/ui/theme/Theme.kt`.
 - `MainActivity` is now under `com.smithware.jellymix`.
 - Old ManagerMeet starter Kotlin files were removed.
-- The first app shell includes connection inputs, Home, Discover, Library, Playlists, player controls, seeded music data, and local recommendation ranking.
+- The first app shell includes connection inputs, Home, Vibe, Discover, Library, Playlists, player controls, seeded music data, and local recommendation ranking.
 - Jellyfin username/password auth, music-library fetch, playlist metadata fetch, playlist drill-in track fetch, primary image URLs, stream URL generation, and framework `MediaPlayer` playback paths are implemented.
 - Server URL normalization and `/System/Info/Public` reachability check run before authentication.
 - Like/unlike is optimistic locally and attempts Jellyfin favorite sync for connected non-demo tracks.
@@ -36,13 +36,14 @@ Done:
 - Tapping the mini player opens a Now Playing page with larger album art, visualizer, transport controls, song details, queue context, autoplay status, and more mixes.
 - Jarvis DJ is implemented as a local conversational radio coordinator. It accepts free-form prompts and quick suggestions, infers Guest DJ modes, rebuilds the queue, persists the active mode/current queue/current track, and explains upcoming track reasons without sending listening data to a cloud service.
 - Guest DJ modes include Flow, Familiar, Discovery, Deep cuts, Artist focus, High energy, and Chill. Now Playing includes DJ mode controls and an autoplay preview with queue reasons.
+- Vibe tab is implemented for emotion/activity playlist search. It supports preset vibes like Chill, Hype, Sad, Angry, Focus, Late Night, Happy, Nostalgic, Workout, and Rainy, and custom metadata searches that build playable vibe mixes.
 - Recently played and local play counts persist on-device and influence ranking.
 - Custom theme options exist in the connection/settings card: System, Light, and Dark mode plus Jelly, Ember, Ocean, Grape, and Mono accent palettes. The selections persist locally.
 - An in-app visualizer exists in Now Playing and in the mini player. It uses Android audio-session waveform capture for real Jellyfin playback after `RECORD_AUDIO` permission, and falls back to animated preview bands for demo mode or unavailable capture.
 - The Jellyfin connection card is onboarding-style: it hides after the library actually loads and reappears only when there is no saved session or the saved session fails to load the library.
 - The mini player was reduced to a compact control surface after phone screenshots showed the previous player consumed too much screen space.
-- Recommendation, local play boost, generated mix, Jarvis DJ prompt/mode handling, autoplay queue, search, discovery filter, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, cached library parsing, image tag detection, theme preference parsing, and visualizer band tests exist in `app/src/test/java/com/smithware/jellymix/RecommendationTest.kt`.
-- `.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug` passed on July 25, 2026 after the Jarvis DJ pass.
+- Recommendation, local play boost, generated mix, vibe playlist search/ranking, Jarvis DJ prompt/mode handling, autoplay queue, search, discovery filter, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, cached library parsing, image tag detection, theme preference parsing, and visualizer band tests exist in `app/src/test/java/com/smithware/jellymix/RecommendationTest.kt`.
+- `.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug` passed on July 25, 2026 after the Vibe tab pass.
 
 Not done:
 
@@ -60,6 +61,7 @@ Published:
 - Home/Now Playing release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.2-home-now-playing`
 - Artwork/startup release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.3-artwork-startup`
 - Jarvis DJ release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.4-jarvis-dj`
+- Vibe tab release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.5-vibe-tab`
 - Server reachability from the Windows workspace was confirmed for `http://www.badgerflix.win/System/Info/Public` and `https://www.badgerflix.win/System/Info/Public`; both returned BadgerFlix `10.11.11`. Phone-side library loading still needs verification.
 
 ## Immediate Next Blocker

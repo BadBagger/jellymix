@@ -210,6 +210,10 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         state = state.copy(searchQuery = value)
     }
 
+    fun setVibeQuery(value: String) {
+        state = state.copy(vibeQuery = value)
+    }
+
     fun setDiscoveryFilter(value: DiscoveryFilter) {
         state = state.copy(discoveryFilter = value)
     }
@@ -1098,6 +1102,25 @@ private fun JellyMixApp(
                         }
                         item { TrackRail("Heavy rotation", visibleTracks.take(10), viewModel::selectTrack) }
                     }
+                    Tab.Vibe -> {
+                        item {
+                            VibeSearchCard(
+                                query = state.vibeQuery,
+                                onQueryChange = viewModel::setVibeQuery,
+                                resultCount = buildVibeMixes(state.tracks, state.vibeQuery, state.liked, state.longListens, state.localPlays).size
+                            )
+                        }
+                        item { VibeChipRow(state.vibeQuery, viewModel::setVibeQuery) }
+                        items(buildVibeMixes(state.tracks, state.vibeQuery, state.liked, state.longListens, state.localPlays)) { vibe ->
+                            VibeMixCard(
+                                mix = vibe,
+                                liked = state.liked,
+                                onQueueSelected = viewModel::startQueue,
+                                onShuffledQueueSelected = viewModel::startShuffledQueue,
+                                onTrackSelected = viewModel::selectTrack
+                            )
+                        }
+                    }
                     Tab.Discover -> {
                         item {
                             JarvisDjCard(
@@ -1522,6 +1545,76 @@ private fun JarvisDjCard(
                         label = { Text(suggestion) }
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VibeSearchCard(query: String, onQueryChange: (String) -> Unit, resultCount: Int) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.GraphicEq, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Vibe finder", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text("Search by feeling, mood, activity, genre, or emotional lane.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            OutlinedTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                label = { Text("Search vibes: sad, hype, chill, angry, focus") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                if (query.isBlank()) "Showing core emotional playlists." else "$resultCount vibe playlists found",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun VibeChipRow(query: String, onQueryChange: (String) -> Unit) {
+    val chips = listOf("Chill", "Hype", "Sad", "Angry", "Focus", "Late night", "Happy", "Nostalgic", "Workout", "Rainy")
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(chips) { chip ->
+            FilterChip(
+                selected = query.equals(chip, ignoreCase = true),
+                onClick = { onQueryChange(chip) },
+                label = { Text(chip) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun VibeMixCard(
+    mix: Mix,
+    liked: Map<String, Boolean>,
+    onQueueSelected: (String, List<Track>) -> Unit,
+    onShuffledQueueSelected: (String, List<Track>) -> Unit,
+    onTrackSelected: (Track) -> Unit
+) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            MixArtwork(mix)
+            Text(mix.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+            Text(mix.reason, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = { onQueueSelected(mix.name, mix.tracks) }, enabled = mix.tracks.isNotEmpty(), modifier = Modifier.weight(1f)) {
+                    Text("Play")
+                }
+                Button(onClick = { onShuffledQueueSelected(mix.name, mix.tracks) }, enabled = mix.tracks.isNotEmpty(), modifier = Modifier.weight(1f)) {
+                    Text("Shuffle")
+                }
+            }
+            mix.tracks.take(3).forEach { track ->
+                QueueReasonRow(track, liked[track.id] == true, "${track.mood} / ${track.genre}") { onTrackSelected(track) }
             }
         }
     }
@@ -2093,6 +2186,7 @@ private fun coverColors(genre: String): List<Color> =
 
 private enum class Tab(val label: String, val icon: ImageVector) {
     Home("Home", Icons.Filled.Home),
+    Vibe("Vibe", Icons.Filled.GraphicEq),
     Discover("Discover", Icons.Filled.Explore),
     Library("Library", Icons.Filled.LibraryMusic),
     Playlists("Playlists", Icons.AutoMirrored.Filled.PlaylistPlay)
@@ -2125,6 +2219,7 @@ data class JellyMixState(
     val themeMode: ThemeMode = ThemeMode.System,
     val accentTheme: AccentTheme = AccentTheme.Jelly,
     val searchQuery: String = "",
+    val vibeQuery: String = "",
     val discoveryFilter: DiscoveryFilter = DiscoveryFilter.LongListens,
     val djMode: GuestDjMode = GuestDjMode.Flow,
     val djDraft: String = "",
@@ -2195,6 +2290,14 @@ data class Track(
 )
 
 data class Mix(val name: String, val reason: String, val tracks: List<Track>)
+
+data class VibeProfile(
+    val name: String,
+    val aliases: Set<String>,
+    val moods: Set<String>,
+    val genres: Set<String>,
+    val reason: String
+)
 
 data class DjMessage(val speaker: String, val text: String)
 
@@ -2273,6 +2376,77 @@ internal fun buildMixes(
         Mix("${strongestMood ?: "Mood"} Flow", "A queue shaped by your current listening mood.", moodTracks.ifEmpty { rankedTracks.take(6) })
     )
 }
+
+private val vibeProfiles = listOf(
+    VibeProfile("Chill", setOf("chill", "calm", "relax", "soft", "easy"), setOf("Calm", "Warm", "Late"), setOf("Ambient", "Indie", "Folk", "Jazz"), "Soft edges, low pressure, and songs that settle in."),
+    VibeProfile("Hype", setOf("hype", "party", "pump", "upbeat", "excited"), setOf("Bright", "Drive", "Loud"), setOf("Electronic", "Synth", "Rock", "Dance"), "High-energy tracks for momentum."),
+    VibeProfile("Sad", setOf("sad", "down", "blue", "heartbreak", "melancholy"), setOf("Calm", "Late", "Warm"), setOf("Indie", "Ambient", "Folk"), "Slower, softer tracks for sitting with it."),
+    VibeProfile("Angry", setOf("angry", "mad", "rage", "aggressive", "loud"), setOf("Loud", "Drive", "Focused"), setOf("Rock", "Metal", "Punk"), "Harder songs with bite and release."),
+    VibeProfile("Focus", setOf("focus", "work", "study", "coding", "concentrate"), setOf("Focused", "Calm", "Drive"), setOf("Ambient", "Electronic", "Synth"), "Steady tracks that stay out of the way."),
+    VibeProfile("Late Night", setOf("late", "night", "midnight", "drive", "neon"), setOf("Late", "Drive", "Calm"), setOf("Synth", "Ambient", "Electronic"), "Night-drive atmosphere and after-hours pacing."),
+    VibeProfile("Happy", setOf("happy", "good", "bright", "sunny", "fun"), setOf("Bright", "Warm", "Drive"), setOf("Indie", "Pop", "Electronic"), "Warm, bright tracks with lift."),
+    VibeProfile("Nostalgic", setOf("nostalgic", "throwback", "memory", "old", "comfort"), setOf("Warm", "Calm", "Late"), setOf("Indie", "Rock", "Folk"), "Comfort songs and familiar-feeling cuts."),
+    VibeProfile("Workout", setOf("workout", "gym", "run", "training", "fast"), setOf("Drive", "Loud", "Focused"), setOf("Rock", "Electronic", "Synth", "Dance"), "Pace-forward songs built for movement."),
+    VibeProfile("Rainy", setOf("rainy", "rain", "storm", "gray", "cozy"), setOf("Calm", "Warm", "Late"), setOf("Ambient", "Indie", "Folk", "Jazz"), "Moody, cozy songs for gray weather.")
+)
+
+internal fun buildVibeMixes(
+    tracks: List<Track>,
+    query: String,
+    liked: Map<String, Boolean>,
+    longListens: Map<String, Int>,
+    localPlays: Map<String, Int>
+): List<Mix> {
+    val normalized = query.trim().lowercase()
+    val profiles = if (normalized.isBlank()) {
+        vibeProfiles.take(6)
+    } else {
+        vibeProfiles.filter { profile ->
+            normalized in profile.name.lowercase() ||
+                profile.aliases.any { normalized in it || it in normalized } ||
+                profile.moods.any { normalized in it.lowercase() || it.lowercase() in normalized } ||
+                profile.genres.any { normalized in it.lowercase() || it.lowercase() in normalized }
+        }.ifEmpty {
+            listOf(
+                VibeProfile(
+                    name = query.trim().replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() },
+                    aliases = setOf(normalized),
+                    moods = emptySet(),
+                    genres = emptySet(),
+                    reason = "A custom vibe search across song, artist, album, genre, and mood."
+                )
+            )
+        }
+    }
+    return profiles.mapNotNull { profile ->
+        val ranked = rankTracksForVibe(tracks, profile, normalized, liked, longListens, localPlays).take(18)
+        if (ranked.isEmpty()) null else Mix("${profile.name} Vibe", profile.reason, ranked)
+    }
+}
+
+internal fun rankTracksForVibe(
+    tracks: List<Track>,
+    profile: VibeProfile,
+    query: String,
+    liked: Map<String, Boolean>,
+    longListens: Map<String, Int>,
+    localPlays: Map<String, Int>
+): List<Track> =
+    tracks.sortedByDescending { track ->
+        val text = "${track.title} ${track.artist} ${track.album} ${track.genre} ${track.mood}".lowercase()
+        val profileBoost =
+            (if (track.mood in profile.moods) 48f else 0f) +
+                (if (track.genre in profile.genres) 34f else 0f) +
+                (if (profile.aliases.any { it in text }) 18f else 0f)
+        val queryBoost = if (query.isNotBlank() && query in text) 90f else 0f
+        profileBoost + queryBoost + recommendationScore(
+            track = track,
+            liked = liked[track.id] == true,
+            longListens = longListens[track.id] ?: 0,
+            skips = 0,
+            localPlays = localPlays[track.id] ?: 0
+        )
+    }
 
 internal fun filterTracks(tracks: List<Track>, query: String): List<Track> {
     val normalized = query.trim().lowercase()

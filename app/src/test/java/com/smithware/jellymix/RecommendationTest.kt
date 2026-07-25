@@ -194,6 +194,54 @@ class RecommendationTest {
     }
 
     @Test
+    fun vibeSearchBuildsEmotionPlaylists() {
+        val calm = sampleTrack("calm", liked = false, plays = 1, completion = 0.6f).copy(mood = "Calm", genre = "Ambient")
+        val loud = sampleTrack("loud", liked = true, plays = 20, completion = 0.95f).copy(mood = "Loud", genre = "Rock")
+        val mixes = buildVibeMixes(
+            tracks = listOf(loud, calm),
+            query = "sad",
+            liked = mapOf("loud" to true),
+            longListens = emptyMap(),
+            localPlays = emptyMap()
+        )
+
+        assertEquals("Sad Vibe", mixes.first().name)
+        assertEquals("calm", mixes.first().tracks.first().id)
+    }
+
+    @Test
+    fun vibeSearchMatchesActivityAliases() {
+        val workout = sampleTrack("workout", liked = false, plays = 1, completion = 0.6f).copy(mood = "Drive", genre = "Electronic")
+        val quiet = sampleTrack("quiet", liked = true, plays = 20, completion = 0.95f).copy(mood = "Calm", genre = "Ambient")
+        val mixes = buildVibeMixes(
+            tracks = listOf(quiet, workout),
+            query = "gym",
+            liked = mapOf("quiet" to true),
+            longListens = emptyMap(),
+            localPlays = emptyMap()
+        )
+
+        assertEquals("Workout Vibe", mixes.first().name)
+        assertEquals("workout", mixes.first().tracks.first().id)
+    }
+
+    @Test
+    fun customVibeSearchFallsBackToMetadata() {
+        val rainy = sampleTrack("rain", liked = false, plays = 1, completion = 0.6f).copy(title = "Rain Window", mood = "Warm", genre = "Indie")
+        val other = sampleTrack("other", liked = true, plays = 20, completion = 0.95f).copy(title = "Sun Run", mood = "Drive", genre = "Rock")
+        val mixes = buildVibeMixes(
+            tracks = listOf(other, rainy),
+            query = "window",
+            liked = mapOf("other" to true),
+            longListens = emptyMap(),
+            localPlays = emptyMap()
+        )
+
+        assertEquals("Window Vibe", mixes.first().name)
+        assertEquals("rain", mixes.first().tracks.first().id)
+    }
+
+    @Test
     fun storageRoundTripKeepsSignals() {
         val ints = mapOf("a" to 1, "b" to 4)
         val booleans = mapOf("a" to true, "b" to false)

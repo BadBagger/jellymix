@@ -11,7 +11,7 @@ What exists:
 - Gradle wrapper and Android project configuration copied from a previously verified Compose app.
 - App identity is `JellyMix` with package/application id `com.smithware.jellymix`.
 - Launcher icon, theme name, internet permission, README, and ignore rules.
-- A native Compose UI with onboarding connection inputs, music-first Home, Discover, Library, Playlists, Now Playing, and a persistent player bar.
+- A native Compose UI with onboarding connection inputs, music-first Home, Vibe, Discover, Library, Playlists, Now Playing, and a persistent player bar.
 - Seeded music data and local interaction signals for likes, skips, and long-listen playlist ranking.
 - Jellyfin username/password authentication using the Jellyfin REST API.
 - Jellyfin server URL normalization and pre-auth server reachability check.
@@ -37,6 +37,7 @@ What exists:
 - Tapping the mini player opens a Now Playing page with larger art, visualizer, controls, song details, queue context, and more mixes.
 - Jarvis DJ adds a local conversational radio coordinator in Discover. It accepts prompts like "give me deep cuts", "chill it out", or "more from this artist", changes DJ mode, rebuilds the queue, and explains why tracks are coming next without sending listening data to a cloud service.
 - Guest DJ modes include Flow, Familiar, Discovery, Deep cuts, Artist focus, High energy, and Chill. Now Playing shows the active mode plus an autoplay preview with reasons for upcoming tracks.
+- Vibe tab adds emotion/activity playlist search for moods like Chill, Hype, Sad, Angry, Focus, Late Night, Happy, Nostalgic, Workout, and Rainy, plus custom metadata-based vibe searches.
 - Start radio from the current track using mood, genre, artist, and local listening signals.
 - Demo playback can be paused before a Jellyfin server is connected.
 - Up Next section with clear-queue action.
@@ -47,7 +48,7 @@ What exists:
 - In-app music visualizer in Now Playing and in the mini player, with live Jellyfin audio capture when permission is granted and animated preview bands for demo/unavailable capture.
 - Login is onboarding-style: the Jellyfin connection panel hides after a real library load, and returns only when no session exists or the library did not load.
 - The mini player is compact so library/discovery content remains usable while music is playing.
-- JVM tests for recommendation ranking, local play boosts, generated mixes, Jarvis DJ prompt/mode handling, autoplay queue behavior, search filtering, discovery filters, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, cached library parsing, image tag detection, theme preference parsing, and visualizer band generation.
+- JVM tests for recommendation ranking, local play boosts, generated mixes, vibe playlist search/ranking, Jarvis DJ prompt/mode handling, autoplay queue behavior, search filtering, discovery filters, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, cached library parsing, image tag detection, theme preference parsing, and visualizer band generation.
 
 Known remaining blocker:
 
@@ -107,4 +108,5 @@ Latest copied debug APK size: 22,659,918 bytes.
 - Home/Now Playing test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.2-home-now-playing`
 - Artwork/startup test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.3-artwork-startup`
 - Jarvis DJ test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.4-jarvis-dj`
+- Vibe tab test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.5-vibe-tab`
 - DevHub release that adds JellyMix to the catalog: `https://github.com/BadBagger/softsmith-devhub/releases/tag/v2.1.88-jellymix`
