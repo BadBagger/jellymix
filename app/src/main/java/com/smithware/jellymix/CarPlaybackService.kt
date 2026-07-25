@@ -2,6 +2,9 @@ package com.smithware.jellymix
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.media.MediaDescription
 import android.media.MediaMetadata
 import android.media.MediaPlayer
@@ -15,17 +18,41 @@ import android.service.media.MediaBrowserService
 class CarPlaybackService : MediaBrowserService() {
     private lateinit var session: MediaSession
     private lateinit var prefs: SharedPreferences
+    private lateinit var audioManager: AudioManager
+    private lateinit var audioFocusRequest: AudioFocusRequest
     private var player: MediaPlayer? = null
     private var tracks: List<Track> = emptyList()
     private var queue: List<Track> = emptyList()
     private var queueIndex: Int = 0
+    private val carAudioAttributes = AudioAttributes.Builder()
+        .setUsage(AudioAttributes.USAGE_MEDIA)
+        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+        .build()
+    private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+        when (focusChange) {
+            AudioManager.AUDIOFOCUS_LOSS,
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> pauseForAudioFocusLoss()
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> player?.setVolume(0.25f, 0.25f)
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                player?.setVolume(1f, 1f)
+                if (player?.isPlaying == true) updatePlaybackState(PlaybackState.STATE_PLAYING)
+            }
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
         prefs = getSharedPreferences("jellymix", Context.MODE_PRIVATE)
+        audioManager = getSystemService(AudioManager::class.java)
+        audioFocusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(carAudioAttributes)
+            .setAcceptsDelayedFocusGain(false)
+            .setOnAudioFocusChangeListener(audioFocusChangeListener)
+            .build()
         refreshTracks()
         session = MediaSession(this, "JellyMixCarSession").apply {
             setCallback(callback)
+            setPlaybackToLocal(carAudioAttributes)
             isActive = true
         }
         sessionToken = session.sessionToken
@@ -55,6 +82,7 @@ class CarPlaybackService : MediaBrowserService() {
     override fun onDestroy() {
         player?.release()
         player = null
+        abandonAudioFocus()
         session.release()
         super.onDestroy()
     }
@@ -70,6 +98,7 @@ class CarPlaybackService : MediaBrowserService() {
 
         override fun onPause() {
             player?.pause()
+            persistCarPlaying(false)
             updatePlaybackState(PlaybackState.STATE_PAUSED)
         }
 
@@ -77,6 +106,8 @@ class CarPlaybackService : MediaBrowserService() {
             player?.stop()
             player?.release()
             player = null
+            abandonAudioFocus()
+            persistCarPlaying(false)
             updatePlaybackState(PlaybackState.STATE_STOPPED)
         }
 
@@ -135,17 +166,33 @@ class CarPlaybackService : MediaBrowserService() {
         val token = prefs.getString("token", "").orEmpty()
         val serverUrl = prefs.getString("serverUrl", "").orEmpty()
         if (token.isBlank() || serverUrl.isBlank() || track.id.startsWith("sample-")) {
-            updatePlaybackState(PlaybackState.STATE_PLAYING)
+            persistCarPlaying(false)
+            updatePlaybackState(
+                state = PlaybackState.STATE_ERROR,
+                errorMessage = "Connect JellyMix to Jellyfin before Android Auto playback."
+            )
             return
         }
+        if (!requestAudioFocus()) {
+            persistCarPlaying(false)
+            updatePlaybackState(
+                state = PlaybackState.STATE_PAUSED,
+                errorMessage = "Android Auto did not grant JellyMix media audio focus."
+            )
+            return
+        }
+        updatePlaybackState(PlaybackState.STATE_BUFFERING)
 
         player = MediaPlayer().apply {
+            setAudioAttributes(carAudioAttributes)
             setDataSource(applicationContext, Uri.parse(jellyfinStreamUrl(serverUrl, track.id, token)))
             setOnPreparedListener {
                 it.start()
+                persistCarPlaying(true)
                 updatePlaybackState(PlaybackState.STATE_PLAYING)
             }
             setOnCompletionListener {
+                persistCarPlaying(false)
                 if (queueIndex >= queue.lastIndex) {
                     queue = buildAutoplayQueue(
                         seed = track,
@@ -163,7 +210,11 @@ class CarPlaybackService : MediaBrowserService() {
                 playCurrent()
             }
             setOnErrorListener { _, _, _ ->
-                updatePlaybackState(PlaybackState.STATE_ERROR)
+                persistCarPlaying(false)
+                updatePlaybackState(
+                    state = PlaybackState.STATE_ERROR,
+                    errorMessage = "JellyMix could not stream this track to Android Auto."
+                )
                 true
             }
             prepareAsync()
@@ -185,18 +236,21 @@ class CarPlaybackService : MediaBrowserService() {
         )
     }
 
-    private fun updatePlaybackState(state: Int) {
+    private fun updatePlaybackState(state: Int, errorMessage: String? = null) {
         val actions = PlaybackState.ACTION_PLAY or
             PlaybackState.ACTION_PAUSE or
             PlaybackState.ACTION_STOP or
             PlaybackState.ACTION_SKIP_TO_NEXT or
             PlaybackState.ACTION_SKIP_TO_PREVIOUS or
             PlaybackState.ACTION_PLAY_FROM_MEDIA_ID
+        val builder = PlaybackState.Builder()
+            .setActions(actions)
+            .setState(state, player?.currentPosition?.toLong() ?: 0L, if (state == PlaybackState.STATE_PLAYING) 1f else 0f)
+        if (!errorMessage.isNullOrBlank()) {
+            builder.setErrorMessage(errorMessage)
+        }
         session.setPlaybackState(
-            PlaybackState.Builder()
-                .setActions(actions)
-                .setState(state, player?.currentPosition?.toLong() ?: 0L, if (state == PlaybackState.STATE_PLAYING) 1f else 0f)
-                .build()
+            builder.build()
         )
     }
 
@@ -224,6 +278,24 @@ class CarPlaybackService : MediaBrowserService() {
             .putString("localPlays", (localPlays + (track.id to ((localPlays[track.id] ?: 0) + 1))).toStorageString())
             .apply()
         JellyMixWidgetProvider.updateAll(this)
+    }
+
+    private fun persistCarPlaying(isPlaying: Boolean) {
+        prefs.edit().putBoolean("isPlaying", isPlaying).apply()
+        JellyMixWidgetProvider.updateAll(this)
+    }
+
+    private fun requestAudioFocus(): Boolean =
+        audioManager.requestAudioFocus(audioFocusRequest) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+
+    private fun abandonAudioFocus() {
+        audioManager.abandonAudioFocusRequest(audioFocusRequest)
+    }
+
+    private fun pauseForAudioFocusLoss() {
+        player?.pause()
+        persistCarPlaying(false)
+        updatePlaybackState(PlaybackState.STATE_PAUSED)
     }
 
     private fun refreshTracks() {

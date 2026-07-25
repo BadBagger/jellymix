@@ -38,7 +38,7 @@ Done:
 - Jarvis DJ is implemented as a local conversational radio coordinator. It accepts free-form prompts and quick suggestions, infers Guest DJ modes, rebuilds the queue, persists the active mode/current queue/current track, and explains upcoming track reasons without sending listening data to a cloud service.
 - Guest DJ modes include Flow, Familiar, Discovery, Deep cuts, Artist focus, High energy, and Chill. Now Playing includes DJ mode controls and an autoplay preview with queue reasons.
 - Vibe tab is implemented for emotion/activity playlist search. It supports preset vibes like Chill, Hype, Sad, Angry, Focus, Late Night, Happy, Nostalgic, Workout, and Rainy, and custom metadata searches that build playable vibe mixes.
-- Android Auto media integration is implemented with a platform `MediaBrowserService` and `MediaSession`. It exposes Curated, Vibes, Jarvis DJ, and Library browse roots, playable track queues, transport controls, Jellyfin stream playback, local play-history updates, and autoplay continuation when a car-started queue ends.
+- Android Auto media integration is implemented with a platform `MediaBrowserService` and `MediaSession`. It exposes Curated, Vibes, Jarvis DJ, and Library browse roots, playable track queues, transport controls, Jellyfin stream playback, local play-history updates, autoplay continuation when a car-started queue ends, local media output attributes, and Android media audio-focus handling.
 - Apple CarPlay is documented as a separate iOS app requirement because this Android app cannot directly integrate with CarPlay or request Apple's CarPlay entitlement.
 - Recently played and local play counts persist on-device and influence ranking.
 - Custom theme options exist in the connection/settings card: System, Light, and Dark mode plus Jelly, Ember, Ocean, Grape, and Mono accent palettes. The selections persist locally.
@@ -49,7 +49,7 @@ Done:
 - The Jellyfin connection card is onboarding-style: it hides after the library actually loads and reappears only when there is no saved session or the saved session fails to load the library.
 - The mini player was reduced to a compact control surface after phone screenshots showed the previous player consumed too much screen space.
 - Recommendation, local play boost, generated mix, vibe playlist search/ranking, Jarvis DJ prompt/mode handling, autoplay queue, search, discovery filter, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, cached library parsing, image tag detection, theme preference parsing, and visualizer band tests exist in `app/src/test/java/com/smithware/jellymix/RecommendationTest.kt`.
-- `.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug` passed on July 25, 2026 after the widget playback-control fix.
+- `.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug` passed on July 25, 2026 after the Android Auto audio-route/focus fix.
 
 Not done:
 
