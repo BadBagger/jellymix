@@ -64,7 +64,7 @@ Published:
 - Artwork/startup release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.3-artwork-startup`
 - Jarvis DJ release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.4-jarvis-dj`
 - Vibe tab release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.5-vibe-tab`
-- Android Auto release: pending
+- Android Auto release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.6-android-auto`
 - Server reachability from the Windows workspace was confirmed for `http://www.badgerflix.win/System/Info/Public` and `https://www.badgerflix.win/System/Info/Public`; both returned BadgerFlix `10.11.11`. Phone-side library loading still needs verification.
 
 ## Immediate Next Blocker

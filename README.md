@@ -112,5 +112,5 @@ Latest copied debug APK size: 22,659,918 bytes.
 - Artwork/startup test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.3-artwork-startup`
 - Jarvis DJ test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.4-jarvis-dj`
 - Vibe tab test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.5-vibe-tab`
-- Android Auto test release: pending
+- Android Auto test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.6-android-auto`
 - DevHub release that adds JellyMix to the catalog: `https://github.com/BadBagger/softsmith-devhub/releases/tag/v2.1.88-jellymix`
