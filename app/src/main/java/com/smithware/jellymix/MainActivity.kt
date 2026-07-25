@@ -150,8 +150,15 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             val token = prefs.getString("token", "").orEmpty()
             val userId = prefs.getString("userId", "").orEmpty()
             val cachedLibrary = readCachedLibrary()
-            val initialTracks = cachedLibrary.tracks.ifEmpty { sampleTracks }
-            val hasCachedSession = token.isNotBlank() && userId.isNotBlank() && cachedLibrary.tracks.isNotEmpty()
+            val hasSavedSession = token.isNotBlank() && userId.isNotBlank()
+            val initialTracks = if (hasSavedSession) cachedLibrary.tracks.ifEmpty { sampleTracks } else sampleTracks
+            val savedQueueIds = prefs.getString("queueIds", null)?.split(",")?.filter { it.isNotBlank() }.orEmpty()
+            val savedQueue = savedQueueIds.mapNotNull { id -> initialTracks.firstOrNull { it.id == id } }
+            val savedCurrentTrackId = prefs.getString("currentTrackId", null)
+            val initialCurrent = initialTracks.firstOrNull { it.id == savedCurrentTrackId }
+                ?: savedQueue.firstOrNull()
+                ?: initialTracks.first()
+            val hasCachedSession = hasSavedSession && cachedLibrary.tracks.isNotEmpty()
             JellyMixState(
                 serverUrl = prefs.getString("serverUrl", "http://jellyfin.local:8096").orEmpty(),
                 username = prefs.getString("username", "").orEmpty(),
@@ -160,7 +167,11 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 themeMode = prefs.getString("themeMode", null).enumValueOrDefault(ThemeMode.System),
                 accentTheme = prefs.getString("accentTheme", null).enumValueOrDefault(AccentTheme.Jelly),
                 tracks = initialTracks,
-                currentTrack = initialTracks.first(),
+                currentTrack = initialCurrent,
+                queue = savedQueue,
+                queueIndex = savedQueue.indexOfFirst { it.id == initialCurrent.id }.coerceAtLeast(0),
+                queueTitle = prefs.getString("queueTitle", "Discovery queue").orEmpty().ifBlank { "Discovery queue" },
+                djMode = prefs.getString("djMode", null).enumValueOrDefault(GuestDjMode.Flow),
                 jellyfinPlaylists = cachedLibrary.playlists,
                 selectedPlaylistTracks = emptyList(),
                 liked = prefs.getString("liked", null)?.toBooleanMap() ?: initialTracks.associate { it.id to it.liked },
@@ -329,6 +340,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         val queue = if (state.queue.any { it.id == track.id }) state.queue else listOf(track)
         val queueTitle = if (state.queue.any { it.id == track.id }) state.queueTitle else "Selected track"
         state = state.copy(currentTrack = track, queue = queue, queueIndex = queueIndex, queueTitle = queueTitle)
+        persistPlaybackState()
         if (state.isPlaying) playCurrentTrack()
     }
 
@@ -346,6 +358,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             queueTitle = title,
             status = "Queued ${queue.size} tracks from $title."
         )
+        persistPlaybackState()
         if (state.isPlaying) playCurrentTrack()
     }
 
@@ -365,6 +378,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             shuffleEnabled = true,
             status = "Shuffled ${queue.size} tracks from $title."
         )
+        persistPlaybackState()
         if (state.isPlaying) playCurrentTrack()
     }
 
@@ -432,15 +446,77 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
 
     fun startRadioFromCurrent() {
         val seed = state.currentTrack
-        val radioTracks = buildTrackRadio(
+        val radioTracks = buildGuestDjQueue(
+            mode = state.djMode,
             seed = seed,
             tracks = state.tracks,
             liked = state.liked,
             longListens = state.longListens,
             skips = state.skips,
-            localPlays = state.localPlays
+            localPlays = state.localPlays,
+            recentlyPlayedIds = state.recentTrackIds
         )
-        startQueue("${seed.title} radio", radioTracks)
+        startQueue("Jarvis DJ ${state.djMode.label}", radioTracks)
+    }
+
+    fun setDjDraft(value: String) {
+        state = state.copy(djDraft = value)
+    }
+
+    fun applyGuestDjMode(mode: GuestDjMode) {
+        val queue = buildGuestDjQueue(
+            mode = mode,
+            seed = state.currentTrack,
+            tracks = state.tracks,
+            liked = state.liked,
+            longListens = state.longListens,
+            skips = state.skips,
+            localPlays = state.localPlays,
+            recentlyPlayedIds = state.recentTrackIds
+        )
+        val message = "I switched to ${mode.label}. ${mode.description}"
+        state = state.copy(
+            djMode = mode,
+            queue = queue,
+            queueIndex = queue.indexOfFirst { it.id == state.currentTrack.id }.coerceAtLeast(0),
+            queueTitle = "Jarvis DJ: ${mode.label}",
+            djMessages = (state.djMessages + DjMessage("Jarvis", message)).takeLast(6),
+            status = message
+        )
+        persistPlaybackState()
+        if (state.isPlaying) playCurrentTrack()
+    }
+
+    fun sendDjPrompt(promptOverride: String? = null) {
+        val prompt = (promptOverride ?: state.djDraft).trim()
+        if (prompt.isBlank()) return
+        val mode = inferGuestDjMode(prompt, state.djMode)
+        val seed = findPromptSeed(prompt, state.tracks) ?: state.currentTrack
+        val queue = buildJarvisDjQueue(
+            prompt = prompt,
+            mode = mode,
+            seed = seed,
+            tracks = state.tracks,
+            liked = state.liked,
+            longListens = state.longListens,
+            skips = state.skips,
+            localPlays = state.localPlays,
+            recentlyPlayedIds = state.recentTrackIds
+        )
+        val current = queue.firstOrNull() ?: state.currentTrack
+        val reply = jarvisDjReply(prompt, mode, current, queue)
+        state = state.copy(
+            currentTrack = current,
+            queue = queue,
+            queueIndex = 0,
+            queueTitle = "Jarvis DJ",
+            djMode = mode,
+            djDraft = "",
+            djMessages = (state.djMessages + DjMessage("You", prompt) + DjMessage("Jarvis", reply)).takeLast(6),
+            status = reply
+        )
+        persistPlaybackState()
+        if (state.isPlaying) playCurrentTrack()
     }
 
     fun toggleLike() {
@@ -494,6 +570,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             repeatEnabled = false,
             status = "Queue cleared."
         )
+        persistPlaybackState()
     }
 
     fun clearSession() {
@@ -503,6 +580,12 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         prefs.edit()
             .remove("token")
             .remove("userId")
+            .remove("cachedTracks")
+            .remove("cachedPlaylists")
+            .remove("currentTrackId")
+            .remove("queueIds")
+            .remove("queueTitle")
+            .remove("djMode")
             .apply()
         state = state.copy(
             token = "",
@@ -513,6 +596,9 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             queue = emptyList(),
             queueIndex = 0,
             queueTitle = "Discovery queue",
+            djMode = GuestDjMode.Flow,
+            djDraft = "",
+            djMessages = listOf(DjMessage("Jarvis", "Tell me what you want to hear. I can go deeper, keep it familiar, make it louder, chill it out, or build around an artist.")),
             jellyfinPlaylists = emptyList(),
             selectedPlaylist = null,
             selectedPlaylistTracks = emptyList(),
@@ -555,6 +641,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             isPlaying = keepPlaying,
             status = if (reachedEnd && !state.repeatEnabled) "Autoplaying ${nextTrack.title}." else "Queued ${nextTrack.title}."
         )
+        persistPlaybackState()
         persistSignals()
         if (state.isPlaying) playCurrentTrack()
     }
@@ -581,6 +668,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             queueIndex = reordered.indexOfFirst { it.id == current.id }.coerceAtLeast(0),
             status = if (!state.shuffleEnabled) "Shuffle on." else "Shuffle off."
         )
+        persistPlaybackState()
     }
 
     fun toggleRepeat() {
@@ -588,6 +676,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             repeatEnabled = !state.repeatEnabled,
             status = if (!state.repeatEnabled) "Repeat queue on." else "Repeat queue off."
         )
+        persistPlaybackState()
     }
 
     private fun playCurrentTrack() {
@@ -716,6 +805,16 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             .putString("longListens", state.longListens.toStorageString())
             .putString("localPlays", state.localPlays.toStorageString())
             .putString("recentTrackIds", state.recentTrackIds.joinToString(","))
+            .apply()
+    }
+
+    private fun persistPlaybackState() {
+        prefs.edit()
+            .putString("currentTrackId", state.currentTrack.id)
+            .putString("queueIds", state.queue.joinToString(",") { it.id })
+            .putInt("queueIndex", state.queueIndex)
+            .putString("queueTitle", state.queueTitle)
+            .putString("djMode", state.djMode.name)
             .apply()
     }
 
@@ -975,6 +1074,7 @@ private fun JellyMixApp(
                             onShuffle = viewModel::toggleShuffle,
                             onRepeat = viewModel::toggleRepeat,
                             onStartRadio = viewModel::startRadioFromCurrent,
+                            onDjModeSelected = viewModel::applyGuestDjMode,
                             onQueueSelected = viewModel::startQueue,
                             onShuffledQueueSelected = viewModel::startShuffledQueue,
                             onClearQueue = viewModel::clearQueue,
@@ -999,6 +1099,15 @@ private fun JellyMixApp(
                         item { TrackRail("Heavy rotation", visibleTracks.take(10), viewModel::selectTrack) }
                     }
                     Tab.Discover -> {
+                        item {
+                            JarvisDjCard(
+                                state = state,
+                                onDraftChange = viewModel::setDjDraft,
+                                onSendPrompt = { viewModel.sendDjPrompt() },
+                                onSuggestion = viewModel::sendDjPrompt,
+                                onModeSelected = viewModel::applyGuestDjMode
+                            )
+                        }
                         item { SearchCard(state.searchQuery, viewModel::setSearchQuery, visibleTracks.size) }
                         item { DiscoveryFilters(state.discoveryFilter, viewModel::setDiscoveryFilter) }
                         item { TrackSection(state.discoveryFilter.sectionTitle, discoveryTracks, state.liked, viewModel::selectTrack) }
@@ -1028,7 +1137,7 @@ private fun JellyMixApp(
                             }
                         }
                         if (state.queue.isNotEmpty()) {
-                            item { UpNextSection(state.queue, state.queueIndex, state.liked, viewModel::selectTrack, viewModel::clearQueue) }
+                            item { UpNextSection(state.queue, state.queueIndex, state.liked, state.currentTrack, state.djMode, viewModel::selectTrack, viewModel::clearQueue) }
                         }
                         items(mixes) { mix -> PlaylistCard(mix, state.liked, viewModel::startQueue, viewModel::startShuffledQueue, viewModel::selectTrack) }
                     }
@@ -1348,6 +1457,96 @@ private fun DiscoveryFilters(selected: DiscoveryFilter, onSelected: (DiscoveryFi
 }
 
 @Composable
+private fun JarvisDjCard(
+    state: JellyMixState,
+    onDraftChange: (String) -> Unit,
+    onSendPrompt: () -> Unit,
+    onSuggestion: (String) -> Unit,
+    onModeSelected: (GuestDjMode) -> Unit
+) {
+    val suggestions = listOf(
+        "Keep this vibe going",
+        "Give me deep cuts",
+        "Make it more high energy",
+        "Chill it out",
+        "Surprise me with fresh stuff"
+    )
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Recommend, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Jarvis DJ", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text("Tell Jarvis what you want. It will rebuild the queue and explain the next picks.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(GuestDjMode.entries) { mode ->
+                    FilterChip(
+                        selected = state.djMode == mode,
+                        onClick = { onModeSelected(mode) },
+                        label = { Text(mode.label) }
+                    )
+                }
+            }
+            state.djMessages.takeLast(3).forEach { message ->
+                Text(
+                    "${message.speaker}: ${message.text}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (message.speaker == "Jarvis") MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            OutlinedTextField(
+                value = state.djDraft,
+                onValueChange = onDraftChange,
+                label = { Text("Ask Jarvis DJ") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = onSendPrompt, enabled = state.djDraft.isNotBlank(), modifier = Modifier.weight(1f)) {
+                    Text("Tune queue")
+                }
+                Button(onClick = { onSuggestion("Keep this vibe going") }, modifier = Modifier.weight(1f)) {
+                    Text("Auto DJ")
+                }
+            }
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(suggestions) { suggestion ->
+                    FilterChip(
+                        selected = false,
+                        onClick = { onSuggestion(suggestion) },
+                        label = { Text(suggestion) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GuestDjModeCard(selected: GuestDjMode, onModeSelected: (GuestDjMode) -> Unit) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Jarvis DJ mode", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(selected.description, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(GuestDjMode.entries) { mode ->
+                    FilterChip(
+                        selected = selected == mode,
+                        onClick = { onModeSelected(mode) },
+                        label = { Text(mode.label) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun MixArtwork(mix: Mix) {
     val tracks = mix.tracks.take(4)
     Box(
@@ -1542,6 +1741,8 @@ private fun UpNextSection(
     queue: List<Track>,
     queueIndex: Int,
     liked: Map<String, Boolean>,
+    currentTrack: Track,
+    djMode: GuestDjMode,
     onTrackSelected: (Track) -> Unit,
     onClearQueue: () -> Unit
 ) {
@@ -1557,10 +1758,57 @@ private fun UpNextSection(
                 }
             }
             queue.drop(queueIndex + 1).take(5).forEach { track ->
-                TrackRow(track, liked[track.id] == true) { onTrackSelected(track) }
+                QueueReasonRow(track, liked[track.id] == true, queueReason(track, currentTrack, djMode)) { onTrackSelected(track) }
             }
             if (queue.drop(queueIndex + 1).isEmpty()) {
                 EmptyState("Autoplay follows this", "JellyMix will keep going with related tracks when this queue ends.")
+            }
+        }
+    }
+}
+
+@Composable
+private fun QueueReasonRow(track: Track, liked: Boolean, reason: String, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            AlbumArt(track, size = 46)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(track.title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${track.artist} - $reason", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Icon(if (liked) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder, contentDescription = null, tint = if (liked) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outline)
+        }
+    }
+}
+
+@Composable
+private fun AutoplayPreviewSection(state: JellyMixState, onTrackSelected: (Track) -> Unit) {
+    val preview = buildGuestDjQueue(
+        mode = state.djMode,
+        seed = state.currentTrack,
+        tracks = state.tracks,
+        liked = state.liked,
+        longListens = state.longListens,
+        skips = state.skips,
+        localPlays = state.localPlays,
+        recentlyPlayedIds = state.recentTrackIds
+    ).filterNot { track ->
+        track.id == state.currentTrack.id ||
+            state.queue.any { it.id == track.id && state.queue.indexOf(it) > state.queueIndex }
+    }
+        .take(4)
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Autoplay preview", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text("If the queue ends, Jarvis will keep going from ${state.currentTrack.title}.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            preview.forEach { track ->
+                QueueReasonRow(track, state.liked[track.id] == true, queueReason(track, state.currentTrack, state.djMode)) { onTrackSelected(track) }
             }
         }
     }
@@ -1666,6 +1914,7 @@ private fun NowPlayingPage(
     onShuffle: () -> Unit,
     onRepeat: () -> Unit,
     onStartRadio: () -> Unit,
+    onDjModeSelected: (GuestDjMode) -> Unit,
     onQueueSelected: (String, List<Track>) -> Unit,
     onShuffledQueueSelected: (String, List<Track>) -> Unit,
     onClearQueue: () -> Unit,
@@ -1717,12 +1966,14 @@ private fun NowPlayingPage(
                 Text("${track.genre} / ${track.mood}", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text("${formatDuration(track.durationSec)} / ${(track.completion * 100).roundToInt()}% complete", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text("${track.plays} server plays / ${state.localPlays[track.id] ?: 0} local plays", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(if (state.repeatEnabled) "Repeat queue is on." else "Autoplay is on. Related music follows when the queue ends.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(if (state.repeatEnabled) "Repeat queue is on." else "Jarvis DJ is on ${state.djMode.label}. Related music follows when the queue ends.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+        GuestDjModeCard(state.djMode, onDjModeSelected)
         if (state.queue.isNotEmpty()) {
-            UpNextSection(state.queue, state.queueIndex, state.liked, onTrackSelected, onClearQueue = onClearQueue)
+            UpNextSection(state.queue, state.queueIndex, state.liked, state.currentTrack, state.djMode, onTrackSelected, onClearQueue = onClearQueue)
         }
+        AutoplayPreviewSection(state, onTrackSelected)
         MixRail("More to play", mixes.take(4), onQueueSelected, onShuffledQueueSelected, onTrackSelected)
     }
 }
@@ -1855,6 +2106,16 @@ enum class DiscoveryFilter(val label: String, val sectionTitle: String) {
     Rediscover("Rediscover", "Worth another listen")
 }
 
+enum class GuestDjMode(val label: String, val description: String) {
+    Flow("Flow", "I will keep the queue close to the current mood and genre."),
+    Familiar("Familiar", "I will favor songs you finish, like, or replay."),
+    Discovery("Discovery", "I will push fresh tracks and avoid recent repeats."),
+    DeepCuts("Deep cuts", "I will dig into lower-play songs with promising signals."),
+    ArtistFocus("Artist focus", "I will stay near the current artist and album lane."),
+    HighEnergy("High energy", "I will lean into loud, drive, rock, synth, and high-completion tracks."),
+    Chill("Chill", "I will soften the queue toward calm, warm, ambient, and lower-pressure songs.")
+}
+
 data class JellyMixState(
     val serverUrl: String,
     val username: String,
@@ -1865,6 +2126,9 @@ data class JellyMixState(
     val accentTheme: AccentTheme = AccentTheme.Jelly,
     val searchQuery: String = "",
     val discoveryFilter: DiscoveryFilter = DiscoveryFilter.LongListens,
+    val djMode: GuestDjMode = GuestDjMode.Flow,
+    val djDraft: String = "",
+    val djMessages: List<DjMessage> = listOf(DjMessage("Jarvis", "Tell me what you want to hear. I can go deeper, keep it familiar, make it louder, chill it out, or build around an artist.")),
     val tracks: List<Track>,
     val currentTrack: Track,
     val queue: List<Track> = emptyList(),
@@ -1931,6 +2195,8 @@ data class Track(
 )
 
 data class Mix(val name: String, val reason: String, val tracks: List<Track>)
+
+data class DjMessage(val speaker: String, val text: String)
 
 data class JellyfinPlaylist(val id: String, val name: String, val childCount: Int, val imageUrl: String?)
 
@@ -2062,8 +2328,122 @@ internal fun buildTrackRadio(
                 skips = skips[track.id] ?: 0,
                 localPlays = localPlays[track.id] ?: 0
             )
-        }
+    }
     return (listOf(seed) + ranked).distinctBy { it.id }.take(25)
+}
+
+internal fun buildGuestDjQueue(
+    mode: GuestDjMode,
+    seed: Track,
+    tracks: List<Track>,
+    liked: Map<String, Boolean>,
+    longListens: Map<String, Int>,
+    skips: Map<String, Int>,
+    localPlays: Map<String, Int>,
+    recentlyPlayedIds: List<String>
+): List<Track> {
+    val recentIds = recentlyPlayedIds.take(12).toSet()
+    val ranked = tracks.sortedByDescending { track ->
+        val base = recommendationScore(
+            track = track,
+            liked = liked[track.id] == true,
+            longListens = longListens[track.id] ?: 0,
+            skips = skips[track.id] ?: 0,
+            localPlays = localPlays[track.id] ?: 0
+        )
+        val continuity =
+            (if (track.id == seed.id) 120f else 0f) +
+                (if (track.mood == seed.mood) 28f else 0f) +
+                (if (track.genre == seed.genre) 22f else 0f) +
+                (if (track.artist == seed.artist) 18f else 0f) +
+                (if (track.album == seed.album) 10f else 0f)
+        val freshness = if (track.id in recentIds) -18f else 8f
+        val modeBoost = when (mode) {
+            GuestDjMode.Flow -> continuity + freshness
+            GuestDjMode.Familiar -> base + if (liked[track.id] == true || (localPlays[track.id] ?: 0) > 1) 36f else 0f
+            GuestDjMode.Discovery -> freshness + if ((localPlays[track.id] ?: 0) == 0 && track.plays <= 2) 40f else 0f
+            GuestDjMode.DeepCuts -> {
+                val lowPlayBoost = (30 - track.plays.coerceAtMost(30)) * 2.8f
+                val skipGuard = if ((skips[track.id] ?: track.skipped) <= 2) 24f else -28f
+                lowPlayBoost + skipGuard - if (liked[track.id] == true && track.plays > 12) 30f else 0f
+            }
+            GuestDjMode.ArtistFocus -> if (track.artist == seed.artist) 62f else if (track.album == seed.album) 34f else -10f
+            GuestDjMode.HighEnergy -> if (track.mood in setOf("Drive", "Loud", "Bright", "Focused") || track.genre in setOf("Rock", "Synth", "Electronic")) 44f else -10f
+            GuestDjMode.Chill -> if (track.mood in setOf("Calm", "Warm", "Late") || track.genre in setOf("Ambient", "Indie", "Folk", "Jazz")) 44f else -10f
+        }
+        base + continuity + modeBoost
+    }
+    return ranked.distinctBy { it.id }.take(30)
+}
+
+internal fun buildJarvisDjQueue(
+    prompt: String,
+    mode: GuestDjMode,
+    seed: Track,
+    tracks: List<Track>,
+    liked: Map<String, Boolean>,
+    longListens: Map<String, Int>,
+    skips: Map<String, Int>,
+    localPlays: Map<String, Int>,
+    recentlyPlayedIds: List<String>
+): List<Track> {
+    val lowered = prompt.lowercase()
+    val base = buildGuestDjQueue(mode, seed, tracks, liked, longListens, skips, localPlays, recentlyPlayedIds)
+    val terms = prompt.split(" ", ",", ".", "!", "?")
+        .map { it.trim().lowercase() }
+        .filter { it.length >= 4 }
+        .toSet()
+    return base.sortedByDescending { track ->
+        val text = "${track.title} ${track.artist} ${track.album} ${track.genre} ${track.mood}".lowercase()
+        val promptMatch = terms.count { it in text } * 18f
+        val lessPenalty = if (lowered.contains("less") || lowered.contains("don't") || lowered.contains("dont")) {
+            terms.count { it in text } * -34f
+        } else {
+            0f
+        }
+        promptMatch + lessPenalty + if (track.id == seed.id) 20f else 0f
+    }.distinctBy { it.id }.take(30)
+}
+
+internal fun inferGuestDjMode(prompt: String, fallback: GuestDjMode): GuestDjMode {
+    val text = prompt.lowercase()
+    return when {
+        listOf("deep", "forgotten", "rare", "less played", "unknown").any { it in text } -> GuestDjMode.DeepCuts
+        listOf("new", "fresh", "discover", "surprise", "different").any { it in text } -> GuestDjMode.Discovery
+        listOf("familiar", "favorites", "liked", "comfort", "safe").any { it in text } -> GuestDjMode.Familiar
+        listOf("artist", "same band", "same singer", "album").any { it in text } -> GuestDjMode.ArtistFocus
+        listOf("loud", "energy", "workout", "drive", "heavy", "fast").any { it in text } -> GuestDjMode.HighEnergy
+        listOf("chill", "calm", "soft", "relax", "sleep", "quiet").any { it in text } -> GuestDjMode.Chill
+        else -> fallback
+    }
+}
+
+internal fun findPromptSeed(prompt: String, tracks: List<Track>): Track? {
+    val text = prompt.lowercase()
+    return tracks.firstOrNull { track ->
+        track.title.lowercase() in text ||
+            track.artist.lowercase() in text ||
+            track.album.lowercase() in text
+    }
+}
+
+internal fun queueReason(track: Track, seed: Track, mode: GuestDjMode): String =
+    when {
+        track.id == seed.id -> "Current seed"
+        track.artist == seed.artist -> "same artist"
+        track.album == seed.album -> "same album"
+        track.mood == seed.mood -> "same ${seed.mood.lowercase()} mood"
+        track.genre == seed.genre -> "same ${seed.genre.lowercase()} lane"
+        mode == GuestDjMode.DeepCuts -> "deep cut candidate"
+        mode == GuestDjMode.Discovery -> "fresh discovery candidate"
+        mode == GuestDjMode.Familiar -> "strong listening signal"
+        else -> mode.label
+    }
+
+internal fun jarvisDjReply(prompt: String, mode: GuestDjMode, current: Track, queue: List<Track>): String {
+    val next = queue.drop(1).firstOrNull()
+    val nextText = next?.let { " Then I am lining up ${it.title} because it is ${queueReason(it, current, mode)}." }.orEmpty()
+    return "I heard: \"$prompt\". I built a ${mode.label} queue around ${current.title}.${nextText}"
 }
 
 internal fun buildAutoplayQueue(

@@ -143,6 +143,57 @@ class RecommendationTest {
     }
 
     @Test
+    fun jarvisPromptInfersDjMode() {
+        assertEquals(GuestDjMode.DeepCuts, inferGuestDjMode("give me deep cuts tonight", GuestDjMode.Flow))
+        assertEquals(GuestDjMode.Chill, inferGuestDjMode("chill it out", GuestDjMode.Flow))
+        assertEquals(GuestDjMode.HighEnergy, inferGuestDjMode("make it loud and high energy", GuestDjMode.Flow))
+        assertEquals(GuestDjMode.Flow, inferGuestDjMode("keep going", GuestDjMode.Flow))
+    }
+
+    @Test
+    fun guestDjDeepCutsPreferLowPlayRelatedTracks() {
+        val seed = sampleTrack("seed", liked = true, plays = 12, completion = 0.9f).copy(mood = "Warm", genre = "Indie")
+        val deepCut = sampleTrack("deep", liked = false, plays = 1, completion = 0.75f).copy(mood = "Warm", genre = "Indie")
+        val obvious = sampleTrack("obvious", liked = true, plays = 30, completion = 0.95f).copy(mood = "Warm", genre = "Indie")
+
+        val queue = buildGuestDjQueue(
+            mode = GuestDjMode.DeepCuts,
+            seed = seed,
+            tracks = listOf(obvious, deepCut, seed),
+            liked = mapOf("obvious" to true),
+            longListens = emptyMap(),
+            skips = emptyMap(),
+            localPlays = emptyMap(),
+            recentlyPlayedIds = emptyList()
+        )
+
+        assertEquals("seed", queue.first().id)
+        assertTrue(queue.indexOf(deepCut) < queue.indexOf(obvious))
+    }
+
+    @Test
+    fun jarvisPromptCanBuildAroundNamedArtist() {
+        val seed = sampleTrack("seed", liked = true, plays = 12, completion = 0.9f).copy(artist = "Glass Harbor", mood = "Late", genre = "Synth")
+        val artistTrack = sampleTrack("artist", liked = false, plays = 1, completion = 0.65f).copy(artist = "Glass Harbor", mood = "Late", genre = "Synth")
+        val other = sampleTrack("other", liked = true, plays = 30, completion = 0.95f).copy(artist = "Other Artist", mood = "Warm", genre = "Indie")
+
+        val queue = buildJarvisDjQueue(
+            prompt = "more Glass Harbor and keep it late",
+            mode = GuestDjMode.ArtistFocus,
+            seed = seed,
+            tracks = listOf(other, artistTrack, seed),
+            liked = mapOf("other" to true),
+            longListens = emptyMap(),
+            skips = emptyMap(),
+            localPlays = emptyMap(),
+            recentlyPlayedIds = emptyList()
+        )
+
+        assertEquals("seed", queue.first().id)
+        assertTrue(queue.indexOf(artistTrack) < queue.indexOf(other))
+    }
+
+    @Test
     fun storageRoundTripKeepsSignals() {
         val ints = mapOf("a" to 1, "b" to 4)
         val booleans = mapOf("a" to true, "b" to false)
