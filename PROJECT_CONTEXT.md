@@ -24,18 +24,22 @@ Done:
 - Server URL, username, auth token, user id, likes, skips, and long-listen counts persist locally in SharedPreferences.
 - Search filters tracks by song, artist, album, genre, and mood.
 - Discovery filter chips are actionable: Long listens, Liked, Low skips, Similar mood, and Rediscover each alter the Discover track list.
-- Generated mixes include Heavy Rotation, Long Listens, Rediscover, Liked Radio, genre radio, and mood flow.
+- Generated mixes include Weekly Discovery, Heavy Rotation, Long Listen Mix, Quick Shuffle, Rediscover, Liked Radio, genre radio, and mood flow.
+- Mixes, generated playlist cards, and the full library expose explicit Play and Shuffle controls.
 - Mixes and loaded playlists can start a queue. Skip is queue-aware. Player controls include shuffle and repeat queue toggles.
-- Playback completion advances through the active queue, marks long listens, and stops at the end unless repeat is enabled.
+- Playback completion advances through the active queue, marks long listens, and starts an autoplay radio queue when the queue ends instead of stopping or looping the same song.
 - Track radio builds a queue from the current song using mood, genre, artist, and local listening signals. Demo playback now pauses correctly.
 - Up Next and clear-queue controls exist. Clear session removes the saved Jellyfin token and returns the app to demo mode.
+- Home is now a music-first surface with current album art, curated mix shelves, stations/discovery, recently played, and heavy rotation. Connection/search/status panels no longer consume the first Home viewport.
+- Jellyfin primary image artwork is used across Home rails, mix shelves, Now Playing, track rows, and the mini player with generated gradient covers only as fallback.
+- Tapping the mini player opens a Now Playing page with larger album art, visualizer, transport controls, song details, queue context, autoplay status, and more mixes.
 - Recently played and local play counts persist on-device and influence ranking.
 - Custom theme options exist in the connection/settings card: System, Light, and Dark mode plus Jelly, Ember, Ocean, Grape, and Mono accent palettes. The selections persist locally.
-- An in-app visualizer exists on Home and in the mini player. It uses Android audio-session waveform capture for real Jellyfin playback after `RECORD_AUDIO` permission, and falls back to animated preview bands for demo mode or unavailable capture.
+- An in-app visualizer exists in Now Playing and in the mini player. It uses Android audio-session waveform capture for real Jellyfin playback after `RECORD_AUDIO` permission, and falls back to animated preview bands for demo mode or unavailable capture.
 - The Jellyfin connection card is onboarding-style: it hides after the library actually loads and reappears only when there is no saved session or the saved session fails to load the library.
 - The mini player was reduced to a compact control surface after phone screenshots showed the previous player consumed too much screen space.
-- Recommendation, local play boost, generated mix, search, discovery filter, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, theme preference parsing, and visualizer band tests exist in `app/src/test/java/com/smithware/jellymix/RecommendationTest.kt`.
-- `.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug` passed on July 24, 2026 after the login/declutter pass.
+- Recommendation, local play boost, generated mix, autoplay queue, search, discovery filter, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, theme preference parsing, and visualizer band tests exist in `app/src/test/java/com/smithware/jellymix/RecommendationTest.kt`.
+- `.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug` passed on July 25, 2026 after the Home album-art/Now Playing tap-target pass.
 
 Not done:
 

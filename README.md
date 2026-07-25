@@ -11,7 +11,7 @@ What exists:
 - Gradle wrapper and Android project configuration copied from a previously verified Compose app.
 - App identity is `JellyMix` with package/application id `com.smithware.jellymix`.
 - Launcher icon, theme name, internet permission, README, and ignore rules.
-- A native Compose UI with connection inputs, Home, Discover, Library, Playlists, and a persistent player bar.
+- A native Compose UI with onboarding connection inputs, music-first Home, Discover, Library, Playlists, Now Playing, and a persistent player bar.
 - Seeded music data and local interaction signals for likes, skips, and long-listen playlist ranking.
 - Jellyfin username/password authentication using the Jellyfin REST API.
 - Jellyfin server URL normalization and pre-auth server reachability check.
@@ -26,9 +26,14 @@ What exists:
 - Actionable discovery filters for long listens, liked tracks, low skips, similar mood, and rediscovery.
 - Empty states for filtered track lists.
 - Generated mixes now include Heavy Rotation, Long Listens, Rediscover, Liked Radio, genre radio, and mood flow.
+- Curated playlist shelves now include Weekly Discovery and Quick Shuffle alongside personalized radio-style mixes.
 - Mix and playlist queue start actions.
+- Explicit Play and Shuffle controls exist on curated mixes, generated playlist cards, and the full library.
 - Queue-aware skip, queue position display, shuffle toggle, and repeat-queue toggle.
-- Playback completion advances through the active queue and stops at the end unless repeat queue is enabled.
+- Playback completion advances through the active queue, then starts an autoplay radio queue instead of stopping or looping the same song.
+- Home now leads with album art, current playback, curated mix shelves, recently played, and heavy rotation instead of connection/search/status panels.
+- Album art is loaded from Jellyfin primary images across rows, mix shelves, Now Playing, and the mini player, with generated covers only as fallback.
+- Tapping the mini player opens a Now Playing page with larger art, visualizer, controls, song details, queue context, and more mixes.
 - Start radio from the current track using mood, genre, artist, and local listening signals.
 - Demo playback can be paused before a Jellyfin server is connected.
 - Up Next section with clear-queue action.
@@ -36,10 +41,10 @@ What exists:
 - Recently played section backed by local play history.
 - Local play counts persist and influence recommendation ranking.
 - Custom theme options with System/Light/Dark mode and Jelly, Ember, Ocean, Grape, and Mono accent palettes persisted locally.
-- In-app music visualizer on Home and in the mini player, with live Jellyfin audio capture when permission is granted and animated preview bands for demo/unavailable capture.
+- In-app music visualizer in Now Playing and in the mini player, with live Jellyfin audio capture when permission is granted and animated preview bands for demo/unavailable capture.
 - Login is onboarding-style: the Jellyfin connection panel hides after a real library load, and returns only when no session exists or the library did not load.
 - The mini player is compact so library/discovery content remains usable while music is playing.
-- JVM tests for recommendation ranking, local play boosts, generated mixes, search filtering, discovery filters, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, theme preference parsing, and visualizer band generation.
+- JVM tests for recommendation ranking, local play boosts, generated mixes, autoplay queue behavior, search filtering, discovery filters, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, theme preference parsing, and visualizer band generation.
 
 Known remaining blocker:
 
@@ -53,7 +58,7 @@ Build a native Android Jellyfin music client that feels closer to Plexamp and Yo
 - Music-first home screen with recently played, heavy rotation, similar artists, albums to rediscover, and quick mixes.
 - Tailored playlists based on local listening signals: likes, skips, repeat plays, completion percentage, and longest-listened tracks.
 - Library views for artists, albums, tracks, genres, favorites, and playlists.
-- Now-playing screen with queue, like, skip, repeat, shuffle, and Jellyfin stream metadata.
+- Now-playing screen with queue, like, skip, repeat, shuffle, song radio, autoplay context, visualizer, and Jellyfin stream metadata.
 - Local-first preference/history/theme cache so personalization remains private on-device.
 
 ## Team lanes

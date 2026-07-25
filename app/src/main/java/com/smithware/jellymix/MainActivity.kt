@@ -82,6 +82,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -329,6 +330,25 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         if (state.isPlaying) playCurrentTrack()
     }
 
+    fun startShuffledQueue(title: String, tracks: List<Track>) {
+        val playableTracks = tracks.distinctBy { it.id }
+        if (playableTracks.isEmpty()) {
+            state = state.copy(status = "No tracks available for $title.")
+            return
+        }
+        val current = playableTracks.random()
+        val queue = listOf(current) + playableTracks.filterNot { it.id == current.id }.shuffled()
+        state = state.copy(
+            currentTrack = current,
+            queue = queue,
+            queueIndex = 0,
+            queueTitle = "$title shuffle",
+            shuffleEnabled = true,
+            status = "Shuffled ${queue.size} tracks from $title."
+        )
+        if (state.isPlaying) playCurrentTrack()
+    }
+
     fun openPlaylist(playlist: JellyfinPlaylist) {
         if (!state.isConnected) {
             state = state.copy(status = "Connect to Jellyfin before opening server playlists.")
@@ -492,15 +512,29 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         }
         val fallbackQueue = state.rankedTracks()
         val queue = state.queue.ifEmpty { fallbackQueue }
-        val nextIndex = nextQueueIndex(state.queueIndex, queue.size, state.repeatEnabled)
-        val nextTrack = queue.getOrNull(nextIndex) ?: fallbackQueue.first()
         val reachedEnd = isQueueEnd(state.queueIndex, queue.size, state.repeatEnabled)
+        val nextQueue = if (reachedEnd && !state.repeatEnabled) {
+            buildAutoplayQueue(
+                seed = state.currentTrack,
+                tracks = state.tracks,
+                liked = state.liked,
+                longListens = state.longListens,
+                skips = state.skips,
+                localPlays = state.localPlays,
+                recentlyPlayedIds = state.recentTrackIds
+            )
+        } else {
+            queue
+        }
+        val nextIndex = if (reachedEnd && !state.repeatEnabled) 0 else nextQueueIndex(state.queueIndex, nextQueue.size, state.repeatEnabled)
+        val nextTrack = nextQueue.getOrNull(nextIndex) ?: fallbackQueue.first()
         state = state.copy(
             currentTrack = nextTrack,
-            queue = queue,
+            queue = nextQueue,
             queueIndex = nextIndex,
-            isPlaying = keepPlaying && !reachedEnd,
-            status = if (reachedEnd) "End of queue." else "Queued ${nextTrack.title}."
+            queueTitle = if (reachedEnd && !state.repeatEnabled) "Autoplay radio" else state.queueTitle,
+            isPlaying = keepPlaying,
+            status = if (reachedEnd && !state.repeatEnabled) "Autoplaying ${nextTrack.title}." else "Queued ${nextTrack.title}."
         )
         persistSignals()
         if (state.isPlaying) playCurrentTrack()
@@ -513,7 +547,13 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             listOf(current) + source.filterNot { it.id == current.id }.shuffled()
         } else {
             source.sortedByDescending {
-                recommendationScore(it, state.liked[it.id] == true, state.longListens[it.id] ?: 0, state.skips[it.id] ?: 0)
+                recommendationScore(
+                    it,
+                    state.liked[it.id] == true,
+                    state.longListens[it.id] ?: 0,
+                    state.skips[it.id] ?: 0,
+                    state.localPlays[it.id] ?: 0
+                )
             }
         }
         state = state.copy(
@@ -822,6 +862,7 @@ private fun JellyMixApp(
     onRequestVisualizerPermission: () -> Unit
 ) {
     var selectedTab by androidx.compose.runtime.remember { mutableStateOf(Tab.Home) }
+    var showNowPlaying by remember { mutableStateOf(false) }
     val state = viewModel.state
     val rankedTracks = state.rankedTracks()
     val visibleTracks = filterTracks(rankedTracks, state.searchQuery)
@@ -834,7 +875,7 @@ private fun JellyMixApp(
         currentTrack = state.currentTrack
     )
     val recentTracks = state.recentTracks()
-    val mixes = buildMixes(rankedTracks, state.liked, state.longListens)
+    val mixes = buildMixes(rankedTracks, state.liked, state.longListens, state.skips, state.localPlays, recentTracks)
 
     Scaffold(
         topBar = {
@@ -844,8 +885,11 @@ private fun JellyMixApp(
             NavigationBar {
                 Tab.entries.forEach { tab ->
                     NavigationBarItem(
-                        selected = selectedTab == tab,
-                        onClick = { selectedTab = tab },
+                        selected = selectedTab == tab && !showNowPlaying,
+                        onClick = {
+                            showNowPlaying = false
+                            selectedTab = tab
+                        },
                         icon = { Icon(tab.icon, contentDescription = tab.label) },
                         label = { Text(tab.label) }
                     )
@@ -864,7 +908,7 @@ private fun JellyMixApp(
                 contentPadding = PaddingValues(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 104.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                if (state.shouldShowConnectionCard) {
+                if (state.shouldShowConnectionCard && !showNowPlaying) {
                     item {
                     ConnectionCard(
                         state = state,
@@ -879,24 +923,39 @@ private fun JellyMixApp(
                     )
                     }
                 }
-                when (selectedTab) {
+                if (showNowPlaying) {
+                    item {
+                        NowPlayingPage(
+                            state = state,
+                            mixes = mixes,
+                            onPlayPause = viewModel::togglePlayPause,
+                            onLike = viewModel::toggleLike,
+                            onSkip = viewModel::skip,
+                            onShuffle = viewModel::toggleShuffle,
+                            onRepeat = viewModel::toggleRepeat,
+                            onStartRadio = viewModel::startRadioFromCurrent,
+                            onQueueSelected = viewModel::startQueue,
+                            onShuffledQueueSelected = viewModel::startShuffledQueue,
+                            onClearQueue = viewModel::clearQueue,
+                            onTrackSelected = viewModel::selectTrack
+                        )
+                    }
+                } else when (selectedTab) {
                     Tab.Home -> {
-                        item { HeroCard(currentTrack = state.currentTrack, serverUrl = state.serverUrl, connected = state.isConnected) }
                         item {
-                            VisualizerCard(
+                            HomeNowCard(
                                 state = state,
-                                onEnableLiveVisualizer = onRequestVisualizerPermission
+                                onOpenNowPlaying = { showNowPlaying = true },
+                                onPlayPause = viewModel::togglePlayPause,
+                                onStartRadio = viewModel::startRadioFromCurrent
                             )
                         }
-                        item { SearchCard(state.searchQuery, viewModel::setSearchQuery, visibleTracks.size) }
-                        item { MixRail("Made from your listening", mixes, viewModel::startQueue, viewModel::selectTrack) }
+                        item { MixRail("Curated for you", mixes.take(4), viewModel::startQueue, viewModel::startShuffledQueue, viewModel::selectTrack) }
+                        item { MixRail("Stations and discovery", mixes.drop(4), viewModel::startQueue, viewModel::startShuffledQueue, viewModel::selectTrack) }
                         if (recentTracks.isNotEmpty()) {
-                            item { TrackSection("Recently played", recentTracks.take(8), state.liked, viewModel::selectTrack) }
+                            item { TrackRail("Recently played", recentTracks.take(10), viewModel::selectTrack) }
                         }
-                        if (state.queue.isNotEmpty()) {
-                            item { UpNextSection(state.queue, state.queueIndex, state.liked, viewModel::selectTrack, viewModel::clearQueue) }
-                        }
-                        item { TrackSection("Heavy rotation", visibleTracks.take(8), state.liked, viewModel::selectTrack) }
+                        item { TrackRail("Heavy rotation", visibleTracks.take(10), viewModel::selectTrack) }
                     }
                     Tab.Discover -> {
                         item { SearchCard(state.searchQuery, viewModel::setSearchQuery, visibleTracks.size) }
@@ -906,6 +965,7 @@ private fun JellyMixApp(
                     Tab.Library -> {
                         item { SearchCard(state.searchQuery, viewModel::setSearchQuery, visibleTracks.size) }
                         item { LibrarySummary(state.tracks, state.jellyfinPlaylists) }
+                        item { LibraryActions(state.tracks, viewModel::startQueue, viewModel::startShuffledQueue) }
                         if (state.jellyfinPlaylists.isNotEmpty()) {
                             item { JellyfinPlaylistRail(state.jellyfinPlaylists, viewModel::openPlaylist) }
                         }
@@ -929,7 +989,7 @@ private fun JellyMixApp(
                         if (state.queue.isNotEmpty()) {
                             item { UpNextSection(state.queue, state.queueIndex, state.liked, viewModel::selectTrack, viewModel::clearQueue) }
                         }
-                        items(mixes) { mix -> PlaylistCard(mix, state.liked, viewModel::startQueue, viewModel::selectTrack) }
+                        items(mixes) { mix -> PlaylistCard(mix, state.liked, viewModel::startQueue, viewModel::startShuffledQueue, viewModel::selectTrack) }
                     }
                 }
             }
@@ -949,6 +1009,7 @@ private fun JellyMixApp(
                 onShuffle = viewModel::toggleShuffle,
                 onRepeat = viewModel::toggleRepeat,
                 onStartRadio = viewModel::startRadioFromCurrent,
+                onOpenNowPlaying = { showNowPlaying = true },
                 modifier = Modifier.align(Alignment.BottomCenter)
             )
         }
@@ -1143,6 +1204,43 @@ private fun VisualizerCard(
 }
 
 @Composable
+private fun HomeNowCard(
+    state: JellyMixState,
+    onOpenNowPlaying: () -> Unit,
+    onPlayPause: () -> Unit,
+    onStartRadio: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpenNowPlaying),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            AlbumArt(state.currentTrack, size = 96)
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(if (state.isPlaying) "Now playing" else "Ready to play", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                Text(state.currentTrack.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text("${state.currentTrack.artist} - ${state.currentTrack.album}", color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(state.queueLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    IconButton(onClick = onPlayPause) {
+                        Icon(if (state.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, contentDescription = "Play")
+                    }
+                    IconButton(onClick = onStartRadio) {
+                        Icon(Icons.Filled.Recommend, contentDescription = "Song radio")
+                    }
+                    IconButton(onClick = onOpenNowPlaying) {
+                        Icon(Icons.Filled.LibraryMusic, contentDescription = "Now playing")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun MusicVisualizer(
     bands: List<Float>,
     isPlaying: Boolean,
@@ -1209,10 +1307,59 @@ private fun DiscoveryFilters(selected: DiscoveryFilter, onSelected: (DiscoveryFi
 }
 
 @Composable
+private fun MixArtwork(mix: Mix) {
+    val tracks = mix.tracks.take(4)
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(126.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        if (tracks.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Brush.linearGradient(listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.secondary))),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Filled.Recommend, contentDescription = null, tint = Color(0xFF101113), modifier = Modifier.size(44.dp))
+            }
+        } else {
+            Column {
+                val topTracks = tracks.take(2)
+                val bottomTracks = tracks.drop(2).take(2)
+                Row {
+                    topTracks.forEach { track -> AlbumArt(track, size = 63) }
+                    repeat((2 - topTracks.size).coerceAtLeast(0)) {
+                        Box(
+                            Modifier
+                                .size(63.dp)
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                        )
+                    }
+                }
+                Row {
+                    bottomTracks.forEach { track -> AlbumArt(track, size = 63) }
+                    repeat((2 - bottomTracks.size).coerceAtLeast(0)) {
+                        Box(
+                            Modifier
+                                .size(63.dp)
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun MixRail(
     title: String,
     mixes: List<Mix>,
     onQueueSelected: (String, List<Track>) -> Unit,
+    onShuffledQueueSelected: (String, List<Track>) -> Unit,
     onTrackSelected: (Track) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1226,10 +1373,18 @@ private fun MixRail(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Icon(Icons.Filled.Recommend, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        MixArtwork(mix)
                         Text(mix.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         Text(mix.reason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text("${mix.tracks.size} tracks", style = MaterialTheme.typography.labelMedium)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                            Button(onClick = { onQueueSelected(mix.name, mix.tracks) }, modifier = Modifier.weight(1f)) {
+                                Text("Play")
+                            }
+                            IconButton(onClick = { onShuffledQueueSelected(mix.name, mix.tracks) }) {
+                                Icon(Icons.Filled.Shuffle, contentDescription = "Shuffle ${mix.name}")
+                            }
+                        }
                         mix.tracks.firstOrNull()?.let { track ->
                             Text(
                                 "Starts with ${track.title}",
@@ -1240,6 +1395,29 @@ private fun MixRail(
                                 modifier = Modifier.clickable { onTrackSelected(track) }
                             )
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TrackRail(title: String, tracks: List<Track>, onTrackSelected: (Track) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            items(tracks) { track ->
+                Card(
+                    modifier = Modifier
+                        .width(148.dp)
+                        .clickable { onTrackSelected(track) },
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        AlbumArt(track, size = 128)
+                        Text(track.title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(track.artist, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -1295,6 +1473,7 @@ private fun PlaylistCard(
     mix: Mix,
     liked: Map<String, Boolean>,
     onQueueSelected: (String, List<Track>) -> Unit,
+    onShuffledQueueSelected: (String, List<Track>) -> Unit,
     onTrackSelected: (Track) -> Unit
 ) {
     Card(
@@ -1304,7 +1483,14 @@ private fun PlaylistCard(
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(mix.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
             Text(mix.reason, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("Tap card to start this queue.", style = MaterialTheme.typography.labelMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = { onQueueSelected(mix.name, mix.tracks) }, modifier = Modifier.weight(1f)) {
+                    Text("Play")
+                }
+                Button(onClick = { onShuffledQueueSelected(mix.name, mix.tracks) }, modifier = Modifier.weight(1f)) {
+                    Text("Shuffle")
+                }
+            }
             mix.tracks.take(4).forEach { track -> TrackRow(track, liked[track.id] == true) { onTrackSelected(track) } }
         }
     }
@@ -1333,7 +1519,30 @@ private fun UpNextSection(
                 TrackRow(track, liked[track.id] == true) { onTrackSelected(track) }
             }
             if (queue.drop(queueIndex + 1).isEmpty()) {
-                EmptyState("Nothing after this", "Start a mix or playlist to fill the queue.")
+                EmptyState("Autoplay follows this", "JellyMix will keep going with related tracks when this queue ends.")
+            }
+        }
+    }
+}
+
+@Composable
+private fun LibraryActions(
+    tracks: List<Track>,
+    onQueueSelected: (String, List<Track>) -> Unit,
+    onShuffledQueueSelected: (String, List<Track>) -> Unit
+) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Button(onClick = { onQueueSelected("Library", tracks) }, enabled = tracks.isNotEmpty(), modifier = Modifier.weight(1f)) {
+                Text("Play all")
+            }
+            Button(onClick = { onShuffledQueueSelected("Library", tracks) }, enabled = tracks.isNotEmpty(), modifier = Modifier.weight(1f)) {
+                Text("Shuffle all")
             }
         }
     }
@@ -1407,6 +1616,77 @@ private fun StatCard(label: String, value: String, modifier: Modifier = Modifier
 }
 
 @Composable
+private fun NowPlayingPage(
+    state: JellyMixState,
+    mixes: List<Mix>,
+    onPlayPause: () -> Unit,
+    onLike: () -> Unit,
+    onSkip: () -> Unit,
+    onShuffle: () -> Unit,
+    onRepeat: () -> Unit,
+    onStartRadio: () -> Unit,
+    onQueueSelected: (String, List<Track>) -> Unit,
+    onShuffledQueueSelected: (String, List<Track>) -> Unit,
+    onClearQueue: () -> Unit,
+    onTrackSelected: (Track) -> Unit
+) {
+    val track = state.currentTrack
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                AlbumArt(track, size = 220)
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(track.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(track.artist, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(track.album, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                LinearProgressIndicator(progress = { track.completion.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+                MusicVisualizer(
+                    bands = state.visualizerBands,
+                    isPlaying = state.isPlaying,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(92.dp)
+                )
+                Row(horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    IconButton(onClick = onShuffle) {
+                        Icon(Icons.Filled.Shuffle, contentDescription = "Shuffle", tint = if (state.shuffleEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    IconButton(onClick = onLike) {
+                        Icon(if (state.liked[track.id] == true) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder, contentDescription = "Like")
+                    }
+                    IconButton(onClick = onPlayPause) {
+                        Icon(if (state.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, contentDescription = "Play")
+                    }
+                    IconButton(onClick = onSkip) {
+                        Icon(Icons.Filled.SkipNext, contentDescription = "Skip")
+                    }
+                    IconButton(onClick = onRepeat) {
+                        Icon(Icons.Filled.Repeat, contentDescription = "Repeat", tint = if (state.repeatEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                Button(onClick = onStartRadio, modifier = Modifier.fillMaxWidth()) {
+                    Text("Start song radio")
+                }
+            }
+        }
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Song details", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text("${track.genre} / ${track.mood}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("${formatDuration(track.durationSec)} / ${(track.completion * 100).roundToInt()}% complete", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("${track.plays} server plays / ${state.localPlays[track.id] ?: 0} local plays", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(if (state.repeatEnabled) "Repeat queue is on." else "Autoplay is on. Related music follows when the queue ends.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (state.queue.isNotEmpty()) {
+            UpNextSection(state.queue, state.queueIndex, state.liked, onTrackSelected, onClearQueue = onClearQueue)
+        }
+        MixRail("More to play", mixes.take(4), onQueueSelected, onShuffledQueueSelected, onTrackSelected)
+    }
+}
+
+@Composable
 private fun PlayerBar(
     track: Track,
     isPlaying: Boolean,
@@ -1423,15 +1703,20 @@ private fun PlayerBar(
     onShuffle: () -> Unit,
     onRepeat: () -> Unit,
     onStartRadio: () -> Unit,
+    onOpenNowPlaying: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Surface(tonalElevation = 8.dp, shadowElevation = 8.dp, modifier = modifier.fillMaxWidth()) {
+    Surface(tonalElevation = 8.dp, shadowElevation = 8.dp, modifier = modifier.fillMaxWidth().clickable(onClick = onOpenNowPlaying)) {
         Column(Modifier.padding(start = 12.dp, top = 8.dp, end = 12.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             LinearProgressIndicator(progress = { track.completion.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
             Row(verticalAlignment = Alignment.CenterVertically) {
                 AlbumArt(track, size = 38)
                 Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .clickable(onClick = onOpenNowPlaying)
+                ) {
                     Text(track.title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
@@ -1463,6 +1748,7 @@ private fun AlbumArt(track: Track, size: Int = 54) {
         AsyncImage(
             model = track.imageUrl,
             contentDescription = null,
+            contentScale = ContentScale.Crop,
             modifier = Modifier
                 .size(size.dp)
                 .clip(RoundedCornerShape(8.dp))
@@ -1636,10 +1922,28 @@ internal fun recommendationScore(track: Track, liked: Boolean, longListens: Int,
     return likeBoost + completionBoost + playBoost + localPlayBoost + longListenBoost - skipPenalty
 }
 
-internal fun buildMixes(rankedTracks: List<Track>, liked: Map<String, Boolean>, longListens: Map<String, Int>): List<Mix> {
+internal fun buildMixes(
+    rankedTracks: List<Track>,
+    liked: Map<String, Boolean>,
+    longListens: Map<String, Int>,
+    skips: Map<String, Int> = emptyMap(),
+    localPlays: Map<String, Int> = emptyMap(),
+    recentTracks: List<Track> = emptyList()
+): List<Mix> {
+    val weeklyDiscoveryTracks = rankedTracks
+        .filter { liked[it.id] != true && it.id !in recentTracks.map { recent -> recent.id } }
+        .sortedByDescending {
+            recommendationScore(it, false, longListens[it.id] ?: 0, skips[it.id] ?: 0, localPlays[it.id] ?: 0) +
+                if (it.completion >= 0.75f) 12f else 0f
+        }
+        .take(18)
     val longListenTracks = rankedTracks.sortedByDescending { it.durationSec + ((longListens[it.id] ?: 0) * 120) }.take(12)
     val likedTracks = rankedTracks.filter { liked[it.id] == true }.take(12)
     val rediscoverTracks = rankedTracks.sortedWith(compareBy<Track> { it.plays }.thenByDescending { it.completion }).take(12)
+    val quickShuffleTracks = rankedTracks
+        .filter { (skips[it.id] ?: it.skipped) <= 2 }
+        .shuffled()
+        .take(18)
     val strongestGenre = likedTracks
         .groupingBy { it.genre }
         .eachCount()
@@ -1654,8 +1958,10 @@ internal fun buildMixes(rankedTracks: List<Track>, liked: Map<String, Boolean>, 
         ?.key
     val moodTracks = strongestMood?.let { mood -> rankedTracks.filter { it.mood == mood }.take(12) }.orEmpty()
     return listOf(
+        Mix("Weekly Discovery", "Fresh picks from your library based on completions, likes, and low skips.", weeklyDiscoveryTracks.ifEmpty { rankedTracks.take(12) }),
         Mix("Heavy Rotation", "High completion, likes, and repeat plays.", rankedTracks.take(12)),
-        Mix("Long Listens", "Songs you finish or keep around the longest.", longListenTracks),
+        Mix("Long Listen Mix", "Songs you finish or keep around the longest.", longListenTracks),
+        Mix("Quick Shuffle", "A loose station of familiar tracks that usually survive skips.", quickShuffleTracks.ifEmpty { rankedTracks.shuffled().take(12) }),
         Mix("Rediscover", "Lower-play tracks with signals worth another shot.", rediscoverTracks),
         Mix("Liked Radio", "A focused queue from your strongest favorites.", likedTracks.ifEmpty { rankedTracks.take(6) }),
         Mix("${strongestGenre ?: "Library"} Radio", "More from the sound you favor most.", genreTracks.ifEmpty { rankedTracks.take(6) }),
@@ -1721,6 +2027,35 @@ internal fun buildTrackRadio(
     return (listOf(seed) + ranked).distinctBy { it.id }.take(25)
 }
 
+internal fun buildAutoplayQueue(
+    seed: Track,
+    tracks: List<Track>,
+    liked: Map<String, Boolean>,
+    longListens: Map<String, Int>,
+    skips: Map<String, Int>,
+    localPlays: Map<String, Int>,
+    recentlyPlayedIds: List<String>
+): List<Track> {
+    val recentPenaltyIds = recentlyPlayedIds.take(8).toSet()
+    val ranked = tracks
+        .filterNot { it.id == seed.id }
+        .sortedByDescending { track ->
+            val continuity =
+                (if (track.mood == seed.mood) 42f else 0f) +
+                    (if (track.genre == seed.genre) 32f else 0f) +
+                    (if (track.artist == seed.artist) 8f else 0f)
+            val freshness = if (track.id in recentPenaltyIds) -24f else 10f
+            continuity + freshness + recommendationScore(
+                track = track,
+                liked = liked[track.id] == true,
+                longListens = longListens[track.id] ?: 0,
+                skips = skips[track.id] ?: 0,
+                localPlays = localPlays[track.id] ?: 0
+            )
+        }
+    return ranked.ifEmpty { tracks.filterNot { it.id == seed.id } }.take(25)
+}
+
 internal fun nextQueueIndex(currentIndex: Int, queueSize: Int, repeatEnabled: Boolean): Int {
     if (queueSize <= 1) return 0
     val next = currentIndex + 1
@@ -1742,6 +2077,12 @@ private fun moodFromGenre(genre: String): String =
         "folk", "indie" -> "Warm"
         else -> "Library"
     }
+
+internal fun formatDuration(durationSec: Int): String {
+    val minutes = durationSec.coerceAtLeast(0) / 60
+    val seconds = durationSec.coerceAtLeast(0) % 60
+    return "$minutes:${seconds.toString().padStart(2, '0')}"
+}
 
 private fun Throwable.cleanMessage(): String =
     when (this) {

@@ -54,10 +54,10 @@ class RecommendationTest {
         )
 
         assertEquals(
-            listOf("Heavy Rotation", "Long Listens", "Rediscover", "Liked Radio", "Indie Radio", "Warm Flow"),
+            listOf("Weekly Discovery", "Heavy Rotation", "Long Listen Mix", "Quick Shuffle", "Rediscover", "Liked Radio", "Indie Radio", "Warm Flow"),
             mixes.map { it.name }
         )
-        assertEquals("2", mixes.first { it.name == "Long Listens" }.tracks.first().id)
+        assertEquals("2", mixes.first { it.name == "Long Listen Mix" }.tracks.first().id)
     }
 
     @Test
@@ -119,6 +119,26 @@ class RecommendationTest {
         )
 
         assertEquals(listOf("seed", "similar", "other"), radio.map { it.id })
+    }
+
+    @Test
+    fun autoplayQueueDoesNotRepeatSeedAndPrefersRelatedMusic() {
+        val seed = sampleTrack("seed", liked = true, plays = 10, completion = 0.9f).copy(mood = "Late", genre = "Synth")
+        val similar = sampleTrack("similar", liked = false, plays = 1, completion = 0.5f).copy(mood = "Late", genre = "Synth")
+        val unrelated = sampleTrack("other", liked = true, plays = 20, completion = 0.9f).copy(mood = "Warm", genre = "Indie")
+
+        val autoplay = buildAutoplayQueue(
+            seed = seed,
+            tracks = listOf(seed, unrelated, similar),
+            liked = mapOf("other" to true),
+            longListens = emptyMap(),
+            skips = emptyMap(),
+            localPlays = emptyMap(),
+            recentlyPlayedIds = listOf("seed")
+        )
+
+        assertEquals("similar", autoplay.first().id)
+        assertTrue(autoplay.none { it.id == "seed" })
     }
 
     @Test
