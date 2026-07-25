@@ -42,6 +42,12 @@ Not done:
 - Live visualizer capture has not been verified on a real device because no device/emulator is attached.
 - Background media session controls and lock-screen controls are not implemented yet.
 
+Published:
+
+- Source repo: `https://github.com/BadBagger/jellymix`
+- Debug test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.0-visualizer-test`
+- DevHub catalog release: `https://github.com/BadBagger/softsmith-devhub/releases/tag/v2.1.88-jellymix`
+
 ## Immediate Next Blocker
 
 Verify and harden real Jellyfin behavior:
