@@ -73,7 +73,7 @@ Published:
 - Home/widget refresh release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.8-home-widget-refresh`
 - Functional widget controls release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.9-widget-controls`
 - Lock-screen controls release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.10-lockscreen-controls`
-- Expanded media controls release: pending
+- Expanded media controls release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.11-expanded-media-controls`
 - Server reachability from the Windows workspace was confirmed for `http://www.badgerflix.win/System/Info/Public` and `https://www.badgerflix.win/System/Info/Public`; both returned BadgerFlix `10.11.11`. Phone-side library loading still needs verification.
 
 ## Immediate Next Blocker
