@@ -120,5 +120,5 @@ Latest copied debug APK size: 22,659,918 bytes.
 - Driving controls test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.7-driving-controls`
 - Home/widget refresh test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.8-home-widget-refresh`
 - Functional widget controls test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.9-widget-controls`
-- Lock-screen controls test release: pending
+- Lock-screen controls test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.10-lockscreen-controls`
 - DevHub release that adds JellyMix to the catalog: `https://github.com/BadBagger/softsmith-devhub/releases/tag/v2.1.88-jellymix`
