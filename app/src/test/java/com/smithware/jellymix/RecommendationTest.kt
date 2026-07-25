@@ -404,6 +404,36 @@ class RecommendationTest {
     }
 
     @Test
+    fun fftAnalysisProducesSmoothedSignals() {
+        val engine = VisualizerAnalysisEngine(bandCount = 32)
+        val fft = ByteArray(128) { index ->
+            when {
+                index % 8 == 2 -> 95
+                index % 11 == 3 -> (-80).toByte()
+                else -> 0
+            }
+        }
+
+        val frame = engine.analyzeVisualizerFft(fft, samplingRateMilliHz = 44_100_000, nowMs = 1_000)
+
+        assertEquals(32, frame.bands.size)
+        assertTrue(frame.live)
+        assertTrue(frame.bands.all { it in 0.04f..1f })
+        assertTrue(frame.rms > 0f)
+        assertTrue(frame.spectralCentroid in 0f..1f)
+    }
+
+    @Test
+    fun ambientAnalysisIsNonLiveAndBounded() {
+        val frame = VisualizerAnalysisEngine(bandCount = 48).ambient(sampleTrack("ambient", liked = false, plays = 1, completion = 0.5f), nowMs = 2_000)
+
+        assertEquals(48, frame.bands.size)
+        assertEquals(false, frame.live)
+        assertTrue(frame.bands.all { it in 0.06f..0.42f })
+        assertTrue(frame.bass >= 0f)
+    }
+
+    @Test
     fun connectionCardHidesAfterLibraryLoads() {
         val track = sampleTrack("connected", liked = false, plays = 1, completion = 0.8f)
         val base = JellyMixState(

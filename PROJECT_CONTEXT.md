@@ -43,20 +43,21 @@ Done:
 - Apple CarPlay is documented as a separate iOS app requirement because this Android app cannot directly integrate with CarPlay or request Apple's CarPlay entitlement.
 - Recently played and local play counts persist on-device and influence ranking.
 - Custom theme options exist in the connection/settings card: System, Light, and Dark mode plus Jelly, Ember, Ocean, Grape, and Mono accent palettes. The selections persist locally.
-- An in-app visualizer exists in Now Playing and in the mini player. It uses Android audio-session waveform capture for real Jellyfin playback after `RECORD_AUDIO` permission, renders a richer mirrored waveform/ribbon instead of basic bars, and falls back to song-shaped animated preview bands based on track, genre, mood, and completion for demo mode or unavailable capture.
+- The Now Playing visualizer has a decoupled audio-analysis layer and a GPU feedback-tunnel renderer. Live Jellyfin playback uses Android audio-session FFT capture after `RECORD_AUDIO` permission and exposes bands, bass, mid, treble, RMS, beat, and spectral-centroid signals. Demo mode or unavailable capture falls back to a calm track-shaped ambient frame instead of freezing. The square album-art slot toggles to the visualizer, and a fullscreen visualizer overlay is available from that stage.
 - Now Playing hides the mini player while open, removes the low-value song-detail card, and uses larger driving-friendly transport controls: 60dp secondary buttons, a 76dp primary play/pause button, and clear active states for shuffle, like, and repeat.
 - Android home-screen widget is included. It reads the local current-track cache, shows title/artist/Jellyfin context, keeps the widget background as an app-open target, and routes play/pause plus skip taps to private foreground-service playback commands so button taps do not open `MainActivity`.
 - Lock-screen/media notification controls are included. The app owns a playback `MediaSession`, posts a public media-style notification with Previous, Play/Pause, Skip, and Stop actions, requests Android 13+ notification permission when playback starts, and routes notification action buttons through foreground-safe private playback commands instead of opening `MainActivity`.
 - The Jellyfin connection card is onboarding-style: it hides after the library actually loads and reappears only when there is no saved session or the saved session fails to load the library.
 - The mini player was reduced to a compact control surface after phone screenshots showed the previous player consumed too much screen space.
-- Recommendation, local play boost, generated mix, vibe playlist search/ranking, Jarvis DJ prompt/mode handling, autoplay queue, search, discovery filter, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, cached library parsing, image tag detection, theme preference parsing, and visualizer band tests exist in `app/src/test/java/com/smithware/jellymix/RecommendationTest.kt`.
-- `.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug` passed on July 25, 2026 after the playback prebuffer and waveform visualizer pass.
+- Recommendation, local play boost, generated mix, vibe playlist search/ranking, Jarvis DJ prompt/mode handling, autoplay queue, search, discovery filter, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, cached library parsing, image tag detection, theme preference parsing, visualizer band tests, and audio-analysis tests exist in `app/src/test/java/com/smithware/jellymix/RecommendationTest.kt`.
+- `.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug` passed on July 25, 2026 after the GPU feedback-tunnel visualizer pass.
 
 Not done:
 
 - Emulator install and launch verification passed on `Smithware_Test_Device` for the debug build.
 - No real Jellyfin server login/playback test has been run yet.
 - Live visualizer capture has not been verified on a real device/server.
+- Exact PCM FFT with a Hann window is not implemented yet; the current live path uses Android's session `Visualizer` FFT behind the new analyzer API. Migrating playback to a PCM-accessible engine can replace the analyzer input later.
 - Lock-screen notification controls are implemented for the main app playback path. Real-device behavior still needs phone-side verification with a Jellyfin stream.
 
 Published:
@@ -83,6 +84,7 @@ Published:
 - Now Playing visualizer stage release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.17-now-playing-visualizer-stage`
 - Visualizer/controls/discovery release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.18-visualizer-controls-discovery`
 - Prebuffer waveform release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.19-prebuffer-waveform`
+- Feedback tunnel visualizer release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.20-feedback-tunnel`
 - Server reachability from the Windows workspace was confirmed for `http://www.badgerflix.win/System/Info/Public` and `https://www.badgerflix.win/System/Info/Public`; both returned BadgerFlix `10.11.11`. Phone-side library loading still needs verification.
 
 ## Immediate Next Blocker

@@ -48,6 +48,8 @@ import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryMusic
@@ -94,6 +96,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import coil.compose.AsyncImage
@@ -186,6 +190,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     private var preloadedPlayer: MediaPlayer? = null
     private var preloadedTrackId: String? = null
     private var visualizer: Visualizer? = null
+    private val visualizerAnalysis = VisualizerAnalysisEngine()
     private var lastVisualizerUpdateMs = 0L
     private val appContext = application.applicationContext
     private val playbackNotificationController = PlaybackNotificationController(appContext)
@@ -489,6 +494,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             state = state.copy(
                 isPlaying = false,
                 visualizerBands = restingVisualizerBands(),
+                audioFrame = ambientFrame(),
                 visualizerMessage = "Visualizer paused.",
                 status = "Paused demo playback."
             )
@@ -502,6 +508,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             state = state.copy(
                 isPlaying = false,
                 visualizerBands = restingVisualizerBands(),
+                audioFrame = ambientFrame(),
                 visualizerMessage = "Visualizer paused.",
                 status = "Paused."
             )
@@ -652,6 +659,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         state = state.copy(
             isPlaying = false,
             visualizerBands = restingVisualizerBands(),
+            audioFrame = ambientFrame(),
             visualizerMessage = "Visualizer stopped.",
             status = "Stopped playback."
         )
@@ -706,6 +714,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             libraryLoaded = false,
             isPlaying = false,
             visualizerBands = restingVisualizerBands(),
+            audioFrame = ambientFrame(),
             visualizerMessage = "Visualizer preview is active. Enable audio capture for live Jellyfin waveforms.",
             status = "Session cleared. Demo discovery mode is active."
         )
@@ -805,6 +814,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             state = state.copy(
                 isPlaying = true,
                 visualizerBands = syntheticVisualizerBands(track),
+                audioFrame = visualizerAnalysis.ambient(track),
                 visualizerMessage = "Preview visualizer is reacting to the queued demo track.",
                 status = "Demo playback active. Connect Jellyfin to stream real audio."
             )
@@ -826,6 +836,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 state = state.copy(
                     isPlaying = true,
                     visualizerBands = syntheticVisualizerBands(track),
+                    audioFrame = visualizerAnalysis.ambient(track),
                     status = "Playing ${track.title}."
                 )
                 persistPlaybackState()
@@ -844,6 +855,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     private fun playCurrentTrackWithoutPreload(track: Track, streamUrl: String) {
         state = state.copy(
             visualizerBands = syntheticVisualizerBands(track),
+            audioFrame = visualizerAnalysis.ambient(track),
             status = "Buffering ${track.title}..."
         )
         runCatching {
@@ -859,6 +871,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                     state = state.copy(
                         isPlaying = true,
                         visualizerBands = syntheticVisualizerBands(track),
+                        audioFrame = visualizerAnalysis.ambient(track),
                         status = "Playing ${track.title}."
                     )
                     persistPlaybackState()
@@ -872,6 +885,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                     state = state.copy(
                         isPlaying = false,
                         visualizerBands = restingVisualizerBands(),
+                        audioFrame = ambientFrame(),
                         visualizerMessage = "Visualizer paused after playback error.",
                         status = "Playback failed for ${track.title}."
                     )
@@ -885,6 +899,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             state = state.copy(
                 isPlaying = false,
                 visualizerBands = restingVisualizerBands(),
+                audioFrame = ambientFrame(),
                 visualizerMessage = "Visualizer paused after playback error.",
                 status = "Playback failed: ${error.cleanMessage()}"
             )
@@ -901,6 +916,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             state = state.copy(
                 isPlaying = false,
                 visualizerBands = restingVisualizerBands(),
+                audioFrame = ambientFrame(),
                 visualizerMessage = "Visualizer paused after playback error.",
                 status = "Playback failed for ${track.title}."
             )
@@ -953,7 +969,8 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         if (!state.visualizerPermissionGranted) {
             state = state.copy(
                 visualizerBands = syntheticVisualizerBands(state.currentTrack),
-                visualizerMessage = "Tap Enable live visualizer for audio-reactive Jellyfin waveforms."
+                audioFrame = visualizerAnalysis.ambient(state.currentTrack),
+                visualizerMessage = "Tap Enable live visualizer for audio-reactive Jellyfin feedback."
             )
             return
         }
@@ -972,11 +989,12 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                             val now = System.currentTimeMillis()
                             if (waveform == null || now - lastVisualizerUpdateMs < 80L) return
                             lastVisualizerUpdateMs = now
-                            val bands = waveform.toVisualizerBands()
+                            val frame = visualizerAnalysis.analyzeWaveform(waveform, now)
                             viewModelScope.launch {
                                 state = state.copy(
-                                    visualizerBands = bands,
-                                    visualizerMessage = "Live Jellyfin audio visualizer."
+                                    visualizerBands = frame.bands,
+                                    audioFrame = frame,
+                                    visualizerMessage = "Live Jellyfin audio-reactive feedback."
                                 )
                             }
                         }
@@ -985,17 +1003,30 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                             visualizer: Visualizer?,
                             fft: ByteArray?,
                             samplingRate: Int
-                        ) = Unit
+                        ) {
+                            val now = System.currentTimeMillis()
+                            if (fft == null || now - lastVisualizerUpdateMs < 33L) return
+                            lastVisualizerUpdateMs = now
+                            val frame = visualizerAnalysis.analyzeVisualizerFft(fft, samplingRate, now)
+                            viewModelScope.launch {
+                                state = state.copy(
+                                    visualizerBands = frame.bands,
+                                    audioFrame = frame,
+                                    visualizerMessage = "Live Jellyfin FFT feedback."
+                                )
+                            }
+                        }
                     },
                     Visualizer.getMaxCaptureRate() / 2,
                     true,
-                    false
+                    true
                 )
                 enabled = true
             }
         }.onFailure { error ->
             state = state.copy(
                 visualizerBands = syntheticVisualizerBands(state.currentTrack),
+                audioFrame = visualizerAnalysis.ambient(state.currentTrack),
                 visualizerMessage = "Preview visualizer active. Live capture unavailable: ${error.cleanMessage()}"
             )
         }
@@ -1678,6 +1709,7 @@ private fun VisualizerCard(
             MusicVisualizer(
                 bands = state.visualizerBands,
                 isPlaying = state.isPlaying,
+                frame = state.audioFrame,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(120.dp)
@@ -1732,9 +1764,26 @@ private fun HomeNowCard(
 private fun MusicVisualizer(
     bands: List<Float>,
     isPlaying: Boolean,
+    frame: AudioAnalysisFrame = ambientFrame(),
     modifier: Modifier = Modifier,
-    compact: Boolean = false
+    compact: Boolean = false,
+    useFeedbackTunnel: Boolean = false,
+    fullscreen: Boolean = false,
+    palette: List<Color>? = null
 ) {
+    if (useFeedbackTunnel) {
+        val effectivePalette = palette ?: listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.secondary, MaterialTheme.colorScheme.tertiary)
+        FeedbackTunnelVisualizer(
+            frame = frame,
+            palette = effectivePalette,
+            isPlaying = isPlaying,
+            modifier = modifier,
+            intensity = if (compact) 0.75f else 1.05f,
+            sensitivity = 1.1f,
+            fullscreen = fullscreen
+        )
+        return
+    }
     val transition = rememberInfiniteTransition(label = "visualizer")
     val phase by transition.animateFloat(
         initialValue = 0f,
@@ -2391,15 +2440,18 @@ private fun NowPlayingPage(
 ) {
     val track = state.currentTrack
     var showVisualizerStage by remember(track.id) { mutableStateOf(false) }
+    var showFullscreenVisualizer by remember(track.id) { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 NowPlayingStage(
                     track = track,
                     bands = state.visualizerBands,
+                    frame = state.audioFrame,
                     isPlaying = state.isPlaying,
                     showVisualizer = showVisualizerStage,
-                    onToggle = { showVisualizerStage = !showVisualizerStage }
+                    onToggle = { showVisualizerStage = !showVisualizerStage },
+                    onFullscreen = { showFullscreenVisualizer = true }
                 )
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(track.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -2452,15 +2504,25 @@ private fun NowPlayingPage(
         AutoplayPreviewSection(state, onTrackSelected)
         MixRail("More to play", mixes.take(4), onQueueSelected, onShuffledQueueSelected, onTrackSelected)
     }
+    if (showFullscreenVisualizer) {
+        FullscreenVisualizerDialog(
+            track = track,
+            frame = state.audioFrame,
+            isPlaying = state.isPlaying,
+            onDismiss = { showFullscreenVisualizer = false }
+        )
+    }
 }
 
 @Composable
 private fun NowPlayingStage(
     track: Track,
     bands: List<Float>,
+    frame: AudioAnalysisFrame,
     isPlaying: Boolean,
     showVisualizer: Boolean,
-    onToggle: () -> Unit
+    onToggle: () -> Unit,
+    onFullscreen: () -> Unit
 ) {
     BoxWithConstraints(
         modifier = Modifier
@@ -2476,17 +2538,78 @@ private fun NowPlayingStage(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Brush.radialGradient(coverColors(track.genre)))
-                    .padding(18.dp),
+                    .padding(0.dp),
                 contentAlignment = Alignment.Center
             ) {
                 MusicVisualizer(
                     bands = bands,
                     isPlaying = isPlaying,
+                    frame = frame,
+                    useFeedbackTunnel = true,
+                    fullscreen = false,
+                    palette = coverColors(track.genre) + listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.secondary, MaterialTheme.colorScheme.tertiary),
                     modifier = Modifier.fillMaxSize()
                 )
             }
+            IconButton(
+                onClick = onFullscreen,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xAA101113))
+            ) {
+                Icon(Icons.Filled.Fullscreen, contentDescription = "Fullscreen visualizer", tint = Color.White)
+            }
         } else {
             AlbumArt(track, size = maxWidth.value.roundToInt())
+        }
+    }
+}
+
+@Composable
+private fun FullscreenVisualizerDialog(
+    track: Track,
+    frame: AudioAnalysisFrame,
+    isPlaying: Boolean,
+    onDismiss: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+        ) {
+            FeedbackTunnelVisualizer(
+                frame = frame,
+                palette = coverColors(track.genre) + listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.secondary, MaterialTheme.colorScheme.tertiary),
+                isPlaying = isPlaying,
+                intensity = 1.25f,
+                sensitivity = 1.2f,
+                fullscreen = true,
+                modifier = Modifier.fillMaxSize()
+            )
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(22.dp)
+            ) {
+                Text(track.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(track.artist, style = MaterialTheme.typography.titleMedium, color = Color.White.copy(alpha = 0.72f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(18.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xAA101113))
+            ) {
+                Icon(Icons.Filled.Close, contentDescription = "Close visualizer", tint = Color.White)
+            }
         }
     }
 }
@@ -2575,6 +2698,7 @@ private fun PlayerBar(
             MusicVisualizer(
                 bands = visualizerBands,
                 isPlaying = isPlaying,
+                frame = ambientFrame(visualizerBands.size.coerceAtLeast(1)).copy(bands = visualizerBands),
                 compact = true,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -2697,6 +2821,7 @@ data class JellyMixState(
     val localPlays: Map<String, Int>,
     val recentTrackIds: List<String>,
     val visualizerBands: List<Float> = restingVisualizerBands(),
+    val audioFrame: AudioAnalysisFrame = ambientFrame(),
     val visualizerPermissionGranted: Boolean = false,
     val visualizerMessage: String = "Visualizer preview is active. Enable audio capture for live Jellyfin waveforms.",
     val libraryLoaded: Boolean = false,
