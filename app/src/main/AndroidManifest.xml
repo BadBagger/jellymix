@@ -4,6 +4,11 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="androidx.car.app.MEDIA_TEMPLATES" />
+
+    <uses-feature
+        android:name="android.software.car.templates_host.media"
+        android:required="false" />
 
     <application
         android:allowBackup="true"
@@ -15,6 +20,9 @@
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.JellyMix">
+        <meta-data
+            android:name="androidx.car.app.minCarApiLevel"
+            android:value="8" />
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -33,7 +41,34 @@
             <intent-filter>
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
+            <meta-data
+                android:name="androidx.car.app.media.CalMediaActivityComponent"
+                android:value="com.smithware.jellymix.CarMediaTrampolineActivity" />
         </service>
+        <service
+            android:name=".JellyMixCarAppService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="androidx.car.app.CarAppService" />
+                <category android:name="androidx.car.app.category.MEDIA" />
+            </intent-filter>
+        </service>
+        <activity
+            android:name=".CarMediaTrampolineActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:label="JellyMix"
+            android:launchMode="singleTask"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+            <meta-data
+                android:name="distractionOptimized"
+                android:value="true" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <action android:name="androidx.car.app.media.action.SHOW_MEDIA_PLAYBACK" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
         <service
             android:name=".WidgetPlaybackService"
             android:exported="false"
