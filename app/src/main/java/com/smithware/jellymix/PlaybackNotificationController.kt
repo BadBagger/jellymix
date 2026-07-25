@@ -96,7 +96,7 @@ class PlaybackNotificationController(private val context: Context) {
         Notification.Action.Builder(
             Icon.createWithResource(context, iconRes),
             label,
-            activityIntent(requestCode, action)
+            playbackServiceIntent(requestCode, action)
         ).build()
 
     private fun activityIntent(requestCode: Int, action: String?): PendingIntent {
@@ -109,6 +109,18 @@ class PlaybackNotificationController(private val context: Context) {
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+    }
+
+    private fun playbackServiceIntent(requestCode: Int, action: String): PendingIntent {
+        val intent = Intent(context, WidgetPlaybackService::class.java).apply {
+            this.action = action
+        }
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            PendingIntent.getForegroundService(context, requestCode, intent, flags)
+        } else {
+            PendingIntent.getService(context, requestCode, intent, flags)
+        }
     }
 
     private fun ensureChannel() {
