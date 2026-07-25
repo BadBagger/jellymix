@@ -79,6 +79,7 @@ Published:
 - Android Auto audio-route release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.14-android-auto-audio-route`
 - Android Auto foreground-media release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.15-android-auto-foreground-media`
 - Car template entry release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.16-car-template-entry`
+- Now Playing visualizer stage release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.17-now-playing-visualizer-stage`
 - Server reachability from the Windows workspace was confirmed for `http://www.badgerflix.win/System/Info/Public` and `https://www.badgerflix.win/System/Info/Public`; both returned BadgerFlix `10.11.11`. Phone-side library loading still needs verification.
 
 ## Immediate Next Blocker

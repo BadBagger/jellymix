@@ -127,4 +127,5 @@ Latest copied debug APK size: 25,635,481 bytes.
 - Android Auto audio-route test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.14-android-auto-audio-route`
 - Android Auto foreground-media test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.15-android-auto-foreground-media`
 - Car template entry test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.16-car-template-entry`
+- Now Playing visualizer stage test release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.17-now-playing-visualizer-stage`
 - DevHub release that adds JellyMix to the catalog: `https://github.com/BadBagger/softsmith-devhub/releases/tag/v2.1.88-jellymix`
