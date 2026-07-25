@@ -3,6 +3,7 @@ package com.smithware.jellymix
 import android.Manifest
 import android.app.Application
 import android.content.Intent
+import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.media.audiofx.Visualizer
 import android.net.Uri
@@ -84,7 +85,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -180,10 +183,16 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     private val prefs = application.getSharedPreferences("jellymix", Application.MODE_PRIVATE)
     private val client = JellyfinClient()
     private var player: MediaPlayer? = null
+    private var preloadedPlayer: MediaPlayer? = null
+    private var preloadedTrackId: String? = null
     private var visualizer: Visualizer? = null
     private var lastVisualizerUpdateMs = 0L
     private val appContext = application.applicationContext
     private val playbackNotificationController = PlaybackNotificationController(appContext)
+    private val musicAudioAttributes = AudioAttributes.Builder()
+        .setUsage(AudioAttributes.USAGE_MEDIA)
+        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+        .build()
     private val widgetPlaybackController = object : WidgetPlaybackController {
         override fun togglePlayPause() = this@JellyMixViewModel.togglePlayPause()
         override fun skip() = this@JellyMixViewModel.skip()
@@ -237,6 +246,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         if (state.token.isNotBlank() && state.userId.isNotBlank()) {
             loadLibrary(backgroundRefresh = state.libraryLoaded)
         }
+        preloadCurrentTrack()
     }
 
     fun setServerUrl(value: String) {
@@ -396,7 +406,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         val queueTitle = if (state.queue.any { it.id == track.id }) state.queueTitle else "Selected track"
         state = state.copy(currentTrack = track, queue = queue, queueIndex = queueIndex, queueTitle = queueTitle)
         persistPlaybackState()
-        if (state.isPlaying) playCurrentTrack()
+        if (state.isPlaying) playCurrentTrack() else preloadCurrentTrack()
     }
 
     fun startQueue(title: String, tracks: List<Track>) {
@@ -414,7 +424,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             status = "Queued ${queue.size} tracks from $title."
         )
         persistPlaybackState()
-        if (state.isPlaying) playCurrentTrack()
+        if (state.isPlaying) playCurrentTrack() else preloadCurrentTrack()
     }
 
     fun startShuffledQueue(title: String, tracks: List<Track>) {
@@ -434,7 +444,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             status = "Shuffled ${queue.size} tracks from $title."
         )
         persistPlaybackState()
-        if (state.isPlaying) playCurrentTrack()
+        if (state.isPlaying) playCurrentTrack() else preloadCurrentTrack()
     }
 
     fun openPlaylist(playlist: JellyfinPlaylist) {
@@ -541,7 +551,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             status = message
         )
         persistPlaybackState()
-        if (state.isPlaying) playCurrentTrack()
+        if (state.isPlaying) playCurrentTrack() else preloadCurrentTrack()
     }
 
     fun sendDjPrompt(promptOverride: String? = null) {
@@ -573,7 +583,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             status = reply
         )
         persistPlaybackState()
-        if (state.isPlaying) playCurrentTrack()
+        if (state.isPlaying) playCurrentTrack() else preloadCurrentTrack()
     }
 
     fun toggleLike() {
@@ -630,13 +640,14 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             status = "Queued ${previousTrack.title}."
         )
         persistPlaybackState()
-        if (state.isPlaying) playCurrentTrack()
+        if (state.isPlaying) playCurrentTrack() else preloadCurrentTrack()
     }
 
     fun stopPlayback() {
         player?.stop()
         player?.release()
         player = null
+        releasePreloadedPlayer()
         releaseAudioVisualizer()
         state = state.copy(
             isPlaying = false,
@@ -662,6 +673,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
 
     fun clearSession() {
         player?.release()
+        releasePreloadedPlayer()
         releaseAudioVisualizer()
         player = null
         prefs.edit()
@@ -748,7 +760,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         )
         persistPlaybackState()
         persistSignals()
-        if (state.isPlaying) playCurrentTrack()
+        if (state.isPlaying) playCurrentTrack() else preloadCurrentTrack()
     }
 
     fun toggleShuffle() {
@@ -788,6 +800,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         val track = state.currentTrack
         if (state.token.isBlank() || track.id.startsWith("sample-")) {
             releaseAudioVisualizer()
+            releasePreloadedPlayer()
             recordPlayStart(track)
             state = state.copy(
                 isPlaying = true,
@@ -799,11 +812,46 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             return
         }
         val streamUrl = client.streamUrl(state.serverUrl, track.id, state.token)
-        state = state.copy(status = "Buffering ${track.title}...")
+        val preparedPlayer = preloadedPlayer
+        if (preparedPlayer != null && preloadedTrackId == track.id) {
+            runCatching {
+                releaseAudioVisualizer()
+                player?.release()
+                preloadedPlayer = null
+                preloadedTrackId = null
+                player = preparedPlayer
+                configureActivePlayer(preparedPlayer, track)
+                preparedPlayer.start()
+                recordPlayStart(track)
+                state = state.copy(
+                    isPlaying = true,
+                    visualizerBands = syntheticVisualizerBands(track),
+                    status = "Playing ${track.title}."
+                )
+                persistPlaybackState()
+                startAudioVisualizer(preparedPlayer.audioSessionId)
+            }.onFailure { error ->
+                preparedPlayer.release()
+                player = null
+                state = state.copy(status = "Preloaded playback failed: ${error.cleanMessage()}")
+                playCurrentTrackWithoutPreload(track, streamUrl)
+            }
+            return
+        }
+        playCurrentTrackWithoutPreload(track, streamUrl)
+    }
+
+    private fun playCurrentTrackWithoutPreload(track: Track, streamUrl: String) {
+        state = state.copy(
+            visualizerBands = syntheticVisualizerBands(track),
+            status = "Buffering ${track.title}..."
+        )
         runCatching {
             releaseAudioVisualizer()
+            releasePreloadedPlayer()
             player?.release()
             player = MediaPlayer().apply {
+                setAudioAttributes(musicAudioAttributes)
                 setDataSource(appContext, Uri.parse(streamUrl))
                 setOnPreparedListener {
                     it.start()
@@ -817,9 +865,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                     startAudioVisualizer(it.audioSessionId)
                 }
                 setOnCompletionListener {
-                    releaseAudioVisualizer()
-                    markLongListen()
-                    advanceQueue(countSkip = false, keepPlaying = true)
+                    handlePlaybackCompletion()
                 }
                 setOnErrorListener { _, _, _ ->
                     releaseAudioVisualizer()
@@ -844,6 +890,62 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             )
             persistPlaybackState()
         }
+    }
+
+    private fun configureActivePlayer(mediaPlayer: MediaPlayer, track: Track) {
+        mediaPlayer.setOnCompletionListener {
+            handlePlaybackCompletion()
+        }
+        mediaPlayer.setOnErrorListener { _, _, _ ->
+            releaseAudioVisualizer()
+            state = state.copy(
+                isPlaying = false,
+                visualizerBands = restingVisualizerBands(),
+                visualizerMessage = "Visualizer paused after playback error.",
+                status = "Playback failed for ${track.title}."
+            )
+            persistPlaybackState()
+            true
+        }
+    }
+
+    private fun handlePlaybackCompletion() {
+        releaseAudioVisualizer()
+        markLongListen()
+        advanceQueue(countSkip = false, keepPlaying = true)
+    }
+
+    private fun preloadCurrentTrack() {
+        val track = state.currentTrack
+        if (state.isPlaying || state.token.isBlank() || track.id.startsWith("sample-")) return
+        if (preloadedTrackId == track.id && preloadedPlayer != null) return
+        releasePreloadedPlayer()
+        val streamUrl = client.streamUrl(state.serverUrl, track.id, state.token)
+        runCatching {
+            preloadedTrackId = track.id
+            preloadedPlayer = MediaPlayer().apply {
+                setAudioAttributes(musicAudioAttributes)
+                setDataSource(appContext, Uri.parse(streamUrl))
+                setOnPreparedListener {
+                    if (state.currentTrack.id != track.id || state.isPlaying) {
+                        releasePreloadedPlayer()
+                    }
+                }
+                setOnErrorListener { _, _, _ ->
+                    releasePreloadedPlayer()
+                    true
+                }
+                prepareAsync()
+            }
+        }.onFailure {
+            releasePreloadedPlayer()
+        }
+    }
+
+    private fun releasePreloadedPlayer() {
+        preloadedPlayer?.release()
+        preloadedPlayer = null
+        preloadedTrackId = null
     }
 
     private fun startAudioVisualizer(audioSessionId: Int) {
@@ -954,6 +1056,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
 
     override fun onCleared() {
         WidgetPlaybackBridge.unregister(widgetPlaybackController)
+        releasePreloadedPlayer()
         player?.release()
         player = null
         playbackNotificationController.release()
@@ -1650,8 +1753,62 @@ private fun MusicVisualizer(
 
     Canvas(modifier = modifier) {
         val count = sourceBands.size.coerceAtLeast(1)
-        val gap = if (compact) 3.dp.toPx() else 5.dp.toPx()
-        val barWidth = ((size.width - gap * (count - 1)) / count).coerceAtLeast(2.dp.toPx())
+        val centerY = size.height * 0.52f
+        val usableHeight = size.height * if (compact) 0.46f else 0.42f
+        val step = if (count <= 1) size.width else size.width / (count - 1)
+        val topPath = Path()
+        val bottomPath = Path()
+        val fillPath = Path()
+        sourceBands.forEachIndexed { index, band ->
+            val pulse = if (isPlaying) {
+                0.9f + 0.1f * sin((phase * 6.28318f) + band * 3.4f + index * 0.21f)
+            } else {
+                0.42f
+            }
+            val normalized = (band * pulse).coerceIn(0.05f, 1f)
+            val x = index * step
+            val yTop = centerY - usableHeight * normalized
+            val yBottom = centerY + usableHeight * normalized * 0.82f
+            if (index == 0) {
+                topPath.moveTo(x, yTop)
+                bottomPath.moveTo(x, yBottom)
+                fillPath.moveTo(x, yTop)
+            } else {
+                topPath.lineTo(x, yTop)
+                bottomPath.lineTo(x, yBottom)
+                fillPath.lineTo(x, yTop)
+            }
+        }
+        for (index in sourceBands.indices.reversed()) {
+            val band = sourceBands[index]
+            val pulse = if (isPlaying) {
+                0.9f + 0.1f * sin((phase * 6.28318f) + band * 3.4f + index * 0.21f)
+            } else {
+                0.42f
+            }
+            val normalized = (band * pulse).coerceIn(0.05f, 1f)
+            val x = index * step
+            val yBottom = centerY + usableHeight * normalized * 0.82f
+            fillPath.lineTo(x, yBottom)
+        }
+        fillPath.close()
+        drawPath(
+            path = fillPath,
+            brush = Brush.verticalGradient(
+                listOf(primary.copy(alpha = if (compact) 0.18f else 0.32f), secondary.copy(alpha = 0.08f))
+            )
+        )
+        drawPath(
+            path = topPath,
+            color = primary.copy(alpha = lineAlpha),
+            style = Stroke(width = if (compact) 2.dp.toPx() else 4.dp.toPx(), cap = StrokeCap.Round)
+        )
+        drawPath(
+            path = bottomPath,
+            color = secondary.copy(alpha = lineAlpha * 0.72f),
+            style = Stroke(width = if (compact) 1.5.dp.toPx() else 3.dp.toPx(), cap = StrokeCap.Round)
+        )
+        val nodeEvery = if (compact) 7 else 4
         sourceBands.forEachIndexed { index, band ->
             val pulse = if (isPlaying) {
                 0.88f + 0.12f * sin((phase * 6.28318f) + sourceBands[index] * 4.2f + index * 0.19f)
@@ -1659,19 +1816,26 @@ private fun MusicVisualizer(
                 0.32f
             }
             val normalized = (band * pulse).coerceIn(0.06f, 1f)
-            val barHeight = size.height * normalized
-            val x = index * (barWidth + gap) + barWidth / 2f
-            val top = size.height - barHeight
+            val x = index * step
+            val peak = centerY - usableHeight * normalized
+            val trough = centerY + usableHeight * normalized * 0.82f
             val color = when (index % 3) {
                 0 -> primary
                 1 -> secondary
                 else -> tertiary
             }
+            if (!compact && index % nodeEvery == 0) {
+                drawCircle(
+                    color = color.copy(alpha = lineAlpha),
+                    radius = (3.dp.toPx() + normalized * 6.dp.toPx()),
+                    center = androidx.compose.ui.geometry.Offset(x, peak)
+                )
+            }
             drawLine(
-                color = color.copy(alpha = lineAlpha),
-                start = androidx.compose.ui.geometry.Offset(x, size.height),
-                end = androidx.compose.ui.geometry.Offset(x, top),
-                strokeWidth = barWidth,
+                color = color.copy(alpha = if (compact) lineAlpha * 0.38f else lineAlpha * 0.5f),
+                start = androidx.compose.ui.geometry.Offset(x, peak),
+                end = androidx.compose.ui.geometry.Offset(x, trough),
+                strokeWidth = if (compact) 1.dp.toPx() else 2.dp.toPx(),
                 cap = StrokeCap.Round
             )
         }

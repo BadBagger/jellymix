@@ -21,6 +21,7 @@ What exists:
 - Jellyfin primary image URLs rendered with Coil for tracks and playlists.
 - Like/unlike persists locally and attempts to sync Jellyfin favorite state for server tracks.
 - Framework `MediaPlayer` streaming from Jellyfin audio stream URLs.
+- Current-track prebuffering for saved sessions and paused queue changes so playback can start faster after tapping Play.
 - Local persistence for server URL, username, auth token, user id, likes, skips, and long-listen counts.
 - Search across songs, artists, albums, genres, and moods.
 - Actionable discovery filters for long listens, liked tracks, low skips, similar mood, and rediscovery.
@@ -48,7 +49,7 @@ What exists:
 - Recently played section backed by local play history.
 - Local play counts persist and influence recommendation ranking.
 - Custom theme options with System/Light/Dark mode and Jelly, Ember, Ocean, Grape, and Mono accent palettes persisted locally.
-- In-app music visualizer in Now Playing and in the mini player, with live Jellyfin audio capture when permission is granted and song-shaped preview bands based on track, genre, mood, and completion when live capture is unavailable.
+- In-app music visualizer in Now Playing and in the mini player, with live Jellyfin audio capture when permission is granted and a richer mirrored waveform/ribbon renderer. Preview waveforms are shaped by track, genre, mood, and completion when live capture is unavailable.
 - Now Playing hides the mini player while open, removes low-value song-detail clutter, and uses larger driving-friendly transport controls with a prominent play/pause button plus clearer active states for shuffle, like, and repeat.
 - Android home-screen widget is included. It shows the current track, artist, Jellyfin context, and play/pause plus skip controls. The widget background opens JellyMix, but the playback buttons dispatch foreground-service commands instead of launching the app.
 - Lock-screen/media notification controls are included with a media-style notification, playback `MediaSession`, public lock-screen visibility, and Previous, Play/Pause, Skip, and Stop actions routed through foreground-safe private playback commands instead of activity launches.

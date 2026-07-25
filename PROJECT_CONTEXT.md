@@ -19,6 +19,7 @@ Done:
 - Old ManagerMeet starter Kotlin files were removed.
 - The first app shell includes connection inputs, Home, Vibe, Discover, Library, Playlists, player controls, seeded music data, and local recommendation ranking.
 - Jellyfin username/password auth, music-library fetch, playlist metadata fetch, playlist drill-in track fetch, primary image URLs, stream URL generation, and framework `MediaPlayer` playback paths are implemented.
+- Current-track prebuffering is implemented for saved sessions and paused queue changes so Jellyfin playback can start faster after tapping Play.
 - Server URL normalization and `/System/Info/Public` reachability check run before authentication.
 - Like/unlike is optimistic locally and attempts Jellyfin favorite sync for connected non-demo tracks.
 - Server URL, username, auth token, user id, likes, skips, and long-listen counts persist locally in SharedPreferences.
@@ -42,14 +43,14 @@ Done:
 - Apple CarPlay is documented as a separate iOS app requirement because this Android app cannot directly integrate with CarPlay or request Apple's CarPlay entitlement.
 - Recently played and local play counts persist on-device and influence ranking.
 - Custom theme options exist in the connection/settings card: System, Light, and Dark mode plus Jelly, Ember, Ocean, Grape, and Mono accent palettes. The selections persist locally.
-- An in-app visualizer exists in Now Playing and in the mini player. It uses Android audio-session waveform capture for real Jellyfin playback after `RECORD_AUDIO` permission, and falls back to song-shaped animated preview bands based on track, genre, mood, and completion for demo mode or unavailable capture.
+- An in-app visualizer exists in Now Playing and in the mini player. It uses Android audio-session waveform capture for real Jellyfin playback after `RECORD_AUDIO` permission, renders a richer mirrored waveform/ribbon instead of basic bars, and falls back to song-shaped animated preview bands based on track, genre, mood, and completion for demo mode or unavailable capture.
 - Now Playing hides the mini player while open, removes the low-value song-detail card, and uses larger driving-friendly transport controls: 60dp secondary buttons, a 76dp primary play/pause button, and clear active states for shuffle, like, and repeat.
 - Android home-screen widget is included. It reads the local current-track cache, shows title/artist/Jellyfin context, keeps the widget background as an app-open target, and routes play/pause plus skip taps to private foreground-service playback commands so button taps do not open `MainActivity`.
 - Lock-screen/media notification controls are included. The app owns a playback `MediaSession`, posts a public media-style notification with Previous, Play/Pause, Skip, and Stop actions, requests Android 13+ notification permission when playback starts, and routes notification action buttons through foreground-safe private playback commands instead of opening `MainActivity`.
 - The Jellyfin connection card is onboarding-style: it hides after the library actually loads and reappears only when there is no saved session or the saved session fails to load the library.
 - The mini player was reduced to a compact control surface after phone screenshots showed the previous player consumed too much screen space.
 - Recommendation, local play boost, generated mix, vibe playlist search/ranking, Jarvis DJ prompt/mode handling, autoplay queue, search, discovery filter, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, cached library parsing, image tag detection, theme preference parsing, and visualizer band tests exist in `app/src/test/java/com/smithware/jellymix/RecommendationTest.kt`.
-- `.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug` passed on July 25, 2026 after the visualizer, notification controls, and artist-diverse queue pass.
+- `.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug` passed on July 25, 2026 after the playback prebuffer and waveform visualizer pass.
 
 Not done:
 
