@@ -100,6 +100,7 @@ Published:
 - Visualizer/controls/discovery release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.18-visualizer-controls-discovery`
 - Prebuffer waveform release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.19-prebuffer-waveform`
 - Feedback tunnel visualizer release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.20-feedback-tunnel`
+- Performance jank release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.23-performance-jank`
 - Server reachability from the Windows workspace was confirmed for `http://www.badgerflix.win/System/Info/Public` and `https://www.badgerflix.win/System/Info/Public`; both returned BadgerFlix `10.11.11`. Phone-side library loading still needs verification.
 
 ## Immediate Next Blocker
