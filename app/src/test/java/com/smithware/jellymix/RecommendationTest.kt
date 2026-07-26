@@ -595,6 +595,17 @@ class RecommendationTest {
     }
 
     @Test
+    fun visualizerFrameBusPublishesLatestFrameWithoutUiStateCoupling() {
+        val bus = VisualizerFrameBus()
+        val frame = VisualizerAnalysisEngine(bandCount = 16).ambient(sampleTrack("bus", liked = true, plays = 2, completion = 0.7f), nowMs = 3_000)
+
+        bus.publish(frame)
+
+        assertEquals(frame, bus.latest())
+        assertEquals(16, bus.latest().bands.size)
+    }
+
+    @Test
     fun feedbackSafetyKeepsHeadlessRenderLuminanceBounded() {
         val safety = FeedbackSafetyMonitor()
         val engine = VisualizerAnalysisEngine(bandCount = 48)

@@ -1,5 +1,7 @@
 package com.smithware.jellymix
 
+import androidx.compose.runtime.Immutable
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.log10
@@ -12,6 +14,7 @@ enum class VisualizerRenderMode {
     Ridgeline
 }
 
+@Immutable
 data class AudioAnalysisFrame(
     val bands: List<Float>,
     val bass: Float,
@@ -23,6 +26,7 @@ data class AudioAnalysisFrame(
     val live: Boolean
 )
 
+@Immutable
 data class VisualizerDebugStats(
     val fps: Float = 0f,
     val meanLuminance: Float = 0f,
@@ -31,6 +35,16 @@ data class VisualizerDebugStats(
     val live: Boolean = false,
     val mode: VisualizerRenderMode = VisualizerRenderMode.FeedbackTunnel
 )
+
+class VisualizerFrameBus(initialFrame: AudioAnalysisFrame = ambientFrame()) {
+    private val latestFrame = AtomicReference(initialFrame)
+
+    fun publish(frame: AudioAnalysisFrame) {
+        latestFrame.set(frame)
+    }
+
+    fun latest(): AudioAnalysisFrame = latestFrame.get()
+}
 
 class FeedbackSafetyMonitor(
     private val highLuminanceThreshold: Float = 0.85f,

@@ -29,6 +29,7 @@ fun FeedbackTunnelVisualizer(
     palette: List<Color>,
     isPlaying: Boolean,
     modifier: Modifier = Modifier,
+    frameBus: VisualizerFrameBus? = null,
     intensity: Float = 1f,
     sensitivity: Float = 1f,
     fullscreen: Boolean = false,
@@ -46,13 +47,13 @@ fun FeedbackTunnelVisualizer(
             }
         },
         update = { view ->
-            renderer.update(frame, palette, isPlaying, intensity, sensitivity, fullscreen, mode, debugOverlay, onStats)
+            renderer.update(frame, frameBus, palette, isPlaying, intensity, sensitivity, fullscreen, mode, debugOverlay, onStats)
             view.renderMode = if (isPlaying) GLSurfaceView.RENDERMODE_CONTINUOUSLY else GLSurfaceView.RENDERMODE_WHEN_DIRTY
             if (!isPlaying) view.requestRender()
         }
     )
-    LaunchedEffect(frame, palette, isPlaying, intensity, sensitivity, fullscreen, mode, debugOverlay) {
-        renderer.update(frame, palette, isPlaying, intensity, sensitivity, fullscreen, mode, debugOverlay, onStats)
+    LaunchedEffect(frame, frameBus, palette, isPlaying, intensity, sensitivity, fullscreen, mode, debugOverlay) {
+        renderer.update(frame, frameBus, palette, isPlaying, intensity, sensitivity, fullscreen, mode, debugOverlay, onStats)
     }
     DisposableEffect(Unit) {
         onDispose { renderer.stop() }
@@ -100,6 +101,7 @@ class FeedbackTunnelRenderer : GLSurfaceView.Renderer {
     @Volatile private var renderMode = VisualizerRenderMode.FeedbackTunnel
     @Volatile private var debugOverlay = false
     @Volatile private var statsCallback: ((VisualizerDebugStats) -> Unit)? = null
+    @Volatile private var frameBus: VisualizerFrameBus? = null
     private var width = 0
     private var height = 0
     private var bufferWidth = 0
@@ -123,6 +125,7 @@ class FeedbackTunnelRenderer : GLSurfaceView.Renderer {
 
     fun update(
         frame: AudioAnalysisFrame,
+        source: VisualizerFrameBus?,
         colors: List<Color>,
         playing: Boolean,
         visualIntensity: Float,
@@ -132,11 +135,8 @@ class FeedbackTunnelRenderer : GLSurfaceView.Renderer {
         showDebug: Boolean,
         onStats: (VisualizerDebugStats) -> Unit
     ) {
-        val incomingBands = frame.bands
-        bandCount = min(incomingBands.size, MAX_BANDS)
-        for (i in 0 until bandCount) {
-            bands[i] = incomingBands[i].coerceIn(0.02f, 1f)
-        }
+        frameBus = source
+        applyFrame(frame)
         val effectiveColors = colors.ifEmpty { listOf(Color(0xFF1DE9B6), Color(0xFF44546A), Color(0xFF6F7885)) }.take(5)
         for (i in 0 until 5) {
             val color = effectiveColors[i % effectiveColors.size]
@@ -144,12 +144,6 @@ class FeedbackTunnelRenderer : GLSurfaceView.Renderer {
             palette[i * 3 + 1] = color.green
             palette[i * 3 + 2] = color.blue
         }
-        bass = frame.bass
-        mid = frame.mid
-        treble = frame.treble
-        rms = frame.rms
-        beat = frame.beat
-        centroid = frame.spectralCentroid
         isPlaying = playing
         intensity = visualIntensity.coerceIn(0.2f, 2f)
         sensitivity = visualSensitivity.coerceIn(0.2f, 2.5f)
@@ -157,6 +151,20 @@ class FeedbackTunnelRenderer : GLSurfaceView.Renderer {
         renderMode = mode
         debugOverlay = showDebug
         statsCallback = onStats
+    }
+
+    private fun applyFrame(frame: AudioAnalysisFrame) {
+        val incomingBands = frame.bands
+        bandCount = min(incomingBands.size, MAX_BANDS)
+        for (i in 0 until bandCount) {
+            bands[i] = incomingBands[i].coerceIn(0.02f, 1f)
+        }
+        bass = frame.bass
+        mid = frame.mid
+        treble = frame.treble
+        rms = frame.rms
+        beat = frame.beat
+        centroid = frame.spectralCentroid
     }
 
     fun stop() {
@@ -190,6 +198,7 @@ class FeedbackTunnelRenderer : GLSurfaceView.Renderer {
         val drawNs = System.nanoTime()
         if (lastRenderedNs != 0L && drawNs - lastRenderedNs < frameTimeNs) return
         lastRenderedNs = drawNs
+        frameBus?.latest()?.let(::applyFrame)
         val now = (System.nanoTime() - startNs) / 1_000_000_000f
         val targetIndex = 1 - sourceIndex
         if (beat) direction *= -1f

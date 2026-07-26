@@ -58,6 +58,14 @@ android {
     }
 
     buildTypes {
+        create("profile") {
+            initWith(getByName("release"))
+            isDebuggable = false
+            isProfileable = true
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release", "debug")
+        }
         release {
             isMinifyEnabled = false
             if (releaseSigningReady) {

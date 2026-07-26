@@ -100,6 +100,7 @@ import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -117,6 +118,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -127,6 +129,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.smithware.jellymix.ui.theme.AccentTheme
 import com.smithware.jellymix.ui.theme.JellyMixTheme
 import com.smithware.jellymix.ui.theme.ThemeMode
@@ -221,7 +224,9 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     private var preloadedTrackId: String? = null
     private var visualizer: Visualizer? = null
     private val visualizerAnalysis = VisualizerAnalysisEngine()
+    val visualizerFrameBus = VisualizerFrameBus()
     private var lastVisualizerUpdateMs = 0L
+    private var fullLibrarySnapshot: JellyfinLibraryLoad? = null
     private val appContext = application.applicationContext
     private val playbackNotificationController = PlaybackNotificationController(appContext)
     private val musicAudioAttributes = AudioAttributes.Builder()
@@ -286,6 +291,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             val cached = withContext(Dispatchers.IO) { readCachedLibrary() }
             if (cached.tracks.isNotEmpty()) {
+                fullLibrarySnapshot = cached
                 val savedQueueIds = prefs.getString("queueIds", null)?.split(",")?.filter { it.isNotBlank() }.orEmpty()
                 val savedQueue = savedQueueIds.mapNotNull { id -> cached.tracks.firstOrNull { it.id == id } }
                 val savedCurrentTrackId = prefs.getString("currentTrackId", null)
@@ -293,11 +299,12 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                     ?: savedQueue.firstOrNull()
                     ?: cached.tracks.first()
                 val cachedTrackIds = cached.tracks.map { it.id }.toHashSet()
-                val features = withContext(Dispatchers.IO) { readAudioFeatureCache(cached.tracks) }
+                val stageForHome = state.selectedTab == Tab.Home
+                val startupTracks = if (stageForHome) compactStartupTracks(cached.tracks, current, savedQueue, state.recentTrackIds) else cached.tracks
                 state = state.copy(
-                    tracks = cached.tracks,
+                    tracks = startupTracks,
                     rawTrackCount = cached.rawTrackCount.takeIf { it > 0 } ?: cached.tracks.size,
-                    audioFeatures = features,
+                    audioFeatures = emptyMap(),
                     currentTrack = current,
                     queue = savedQueue,
                     queueIndex = savedQueue.indexOfFirst { it.id == current.id }.coerceAtLeast(0),
@@ -308,7 +315,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                     localPlays = state.localPlays.filterKeys { it in cachedTrackIds },
                     recentTrackIds = state.recentTrackIds.filter { it in cachedTrackIds },
                     libraryLoaded = true,
-                    status = "Ready from saved library. Refreshing Jellyfin..."
+                    status = if (stageForHome) "Ready from saved library. Full library loads when needed." else "Ready from saved library. Refreshing Jellyfin..."
                 )
                 preloadCurrentTrack()
                 viewModelScope.launch {
@@ -348,9 +355,42 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     fun setSelectedTab(value: Tab) {
         state = state.copy(selectedTab = value)
         prefs.edit().putString("selectedTab", value.name).apply()
+        promoteFullLibraryIfNeeded(value)
+    }
+
+    private fun compactStartupTracks(
+        tracks: List<Track>,
+        current: Track,
+        queue: List<Track>,
+        recentIds: List<String>,
+        limit: Int = 320
+    ): List<Track> {
+        val recent = recentIds.mapNotNull { id -> tracks.firstOrNull { it.id == id } }
+        return (listOf(current) + queue.take(60) + recent.take(80) + tracks.take(limit))
+            .distinctBy { it.id }
+            .take(limit)
+    }
+
+    private fun promoteFullLibraryIfNeeded(targetTab: Tab = state.selectedTab) {
+        val snapshot = fullLibrarySnapshot ?: return
+        if (targetTab == Tab.Home || state.tracks.size >= snapshot.tracks.size) return
+        val byId = snapshot.tracks.associateBy { it.id }
+        val promotedCurrent = byId[state.currentTrack.id] ?: state.currentTrack
+        val promotedQueue = state.queue.map { byId[it.id] ?: it }
+        state = state.copy(
+            tracks = snapshot.tracks,
+            rawTrackCount = snapshot.rawTrackCount.takeIf { it > 0 } ?: snapshot.tracks.size,
+            currentTrack = promotedCurrent,
+            queue = promotedQueue,
+            jellyfinPlaylists = snapshot.playlists,
+            status = "Full library ready."
+        )
     }
 
     fun setMixesSegment(value: MixesSegment) {
+        if (value != MixesSegment.Mixes || state.selectedTab == Tab.Mixes) {
+            promoteFullLibraryIfNeeded(Tab.Mixes)
+        }
         state = state.copy(mixesSegment = value)
         prefs.edit().putString("mixesSegment", value.name).apply()
     }
@@ -483,7 +523,6 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                     val trackIds = tracks.map { it.id }.toHashSet()
                     PreparedLibraryState(
                         tracks = tracks,
-                        features = readAudioFeatureCache(tracks),
                         liked = currentLiked.filterKeys { it in trackIds },
                         skips = currentSkips.filterKeys { it in trackIds },
                         longListens = currentLongListens.filterKeys { it in trackIds },
@@ -491,13 +530,27 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                         recentTrackIds = currentRecentIds.filter { it in trackIds }
                     )
                 }
+                fullLibrarySnapshot = JellyfinLibraryLoad(
+                    tracks = prepared.tracks,
+                    playlists = library.playlists,
+                    rawTrackCount = library.rawTrackCount.takeIf { it > 0 } ?: prepared.tracks.sumOf { 1 + it.alternates.size }
+                )
+                val stageForHome = backgroundRefresh && state.selectedTab == Tab.Home
+                val currentFromRefreshedLibrary = prepared.tracks.firstOrNull { it.id == state.currentTrack.id }
+                    ?: prepared.tracks.firstOrNull()
+                    ?: state.currentTrack
+                val uiTracks = if (stageForHome) {
+                    compactStartupTracks(prepared.tracks, currentFromRefreshedLibrary, state.queue, prepared.recentTrackIds)
+                } else {
+                    prepared.tracks
+                }
                 state = state.copy(
                     isLoading = false,
                     libraryLoaded = true,
-                    tracks = prepared.tracks,
-                    rawTrackCount = library.rawTrackCount.takeIf { it > 0 } ?: prepared.tracks.sumOf { 1 + it.alternates.size },
-                    audioFeatures = prepared.features,
-                    currentTrack = prepared.tracks.firstOrNull() ?: state.currentTrack,
+                    tracks = uiTracks,
+                    rawTrackCount = fullLibrarySnapshot?.rawTrackCount ?: uiTracks.size,
+                    audioFeatures = emptyMap(),
+                    currentTrack = currentFromRefreshedLibrary,
                     liked = prepared.liked,
                     skips = prepared.skips,
                     longListens = prepared.longListens,
@@ -506,11 +559,14 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                     jellyfinPlaylists = library.playlists,
                     selectedPlaylist = null,
                     selectedPlaylistTracks = emptyList(),
-                    status = "Connected. Loaded ${prepared.tracks.size} deduped tracks from ${library.rawTrackCount.takeIf { it > 0 } ?: prepared.tracks.size} library items and ${library.playlists.size} playlists."
+                    status = if (stageForHome) {
+                        "Connected. Library refreshed in the background."
+                    } else {
+                        "Connected. Loaded ${prepared.tracks.size} deduped tracks from ${library.rawTrackCount.takeIf { it > 0 } ?: prepared.tracks.size} library items and ${library.playlists.size} playlists."
+                    }
                 )
                 withContext(Dispatchers.IO) {
                     persistCachedLibrary(prepared.tracks, library.playlists)
-                    persistAudioFeatureCache(prepared.features)
                 }
                 persistSignals()
             }.onFailure { error ->
@@ -1149,9 +1205,11 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     private fun startAudioVisualizer(audioSessionId: Int) {
         if (audioSessionId == 0) return
         if (!state.visualizerPermissionGranted) {
+            val frame = visualizerAnalysis.ambient(state.currentTrack)
+            visualizerFrameBus.publish(frame)
             state = state.copy(
-                visualizerBands = syntheticVisualizerBands(state.currentTrack),
-                audioFrame = visualizerAnalysis.ambient(state.currentTrack),
+                visualizerBands = frame.bands,
+                audioFrame = frame,
                 visualizerMessage = "Tap Enable live visualizer for audio-reactive Jellyfin feedback."
             )
             return
@@ -1172,13 +1230,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                             if (waveform == null || now - lastVisualizerUpdateMs < 120L) return
                             lastVisualizerUpdateMs = now
                             val frame = visualizerAnalysis.analyzeWaveform(waveform, now)
-                            viewModelScope.launch {
-                                state = state.copy(
-                                    visualizerBands = frame.bands,
-                                    audioFrame = frame,
-                                    visualizerMessage = "Live Jellyfin audio-reactive feedback."
-                                )
-                            }
+                            visualizerFrameBus.publish(frame)
                         }
 
                         override fun onFftDataCapture(
@@ -1190,13 +1242,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                             if (fft == null || now - lastVisualizerUpdateMs < 80L) return
                             lastVisualizerUpdateMs = now
                             val frame = visualizerAnalysis.analyzeVisualizerFft(fft, samplingRate, now)
-                            viewModelScope.launch {
-                                state = state.copy(
-                                    visualizerBands = frame.bands,
-                                    audioFrame = frame,
-                                    visualizerMessage = "Live Jellyfin FFT feedback."
-                                )
-                            }
+                            visualizerFrameBus.publish(frame)
                         }
                     },
                     Visualizer.getMaxCaptureRate() / 2,
@@ -1205,10 +1251,13 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 )
                 enabled = true
             }
+            state = state.copy(visualizerMessage = "Live Jellyfin FFT feedback.")
         }.onFailure { error ->
+            val frame = visualizerAnalysis.ambient(state.currentTrack)
+            visualizerFrameBus.publish(frame)
             state = state.copy(
-                visualizerBands = syntheticVisualizerBands(state.currentTrack),
-                audioFrame = visualizerAnalysis.ambient(state.currentTrack),
+                visualizerBands = frame.bands,
+                audioFrame = frame,
                 visualizerMessage = "Preview visualizer active. Live capture unavailable: ${error.cleanMessage()}"
             )
         }
@@ -1477,9 +1526,12 @@ private fun JellyMixApp(
         showMiniPlayer = true
     }
     val homeOnly = state.selectedTab == Tab.Home && !showNowPlaying
-    val rankedTracks = remember(homeOnly, state.tracks, state.liked, state.longListens, state.skips, state.localPlays) {
-        if (homeOnly) {
-            state.tracks
+    val needsFullMixes = showNowPlaying || state.selectedTab == Tab.Mixes
+    val needsFullRanking = needsFullMixes
+    val rankedTracks = remember(homeOnly, needsFullRanking, state.tracks, state.liked, state.longListens, state.skips, state.localPlays) {
+        when {
+            homeOnly -> state.tracks
+                .asSequence()
                 .take(240)
                 .sortedByDescending { track ->
                     recommendationScore(
@@ -1490,35 +1542,45 @@ private fun JellyMixApp(
                         localPlays = state.localPlays[track.id] ?: 0
                     )
                 }
-        } else {
-            deduplicateTracks(state.rankedTracks())
+                .toList()
+            needsFullRanking -> deduplicateTracks(state.rankedTracks())
+            else -> emptyList()
         }
     }
-    val visibleTracks = remember(rankedTracks, state.searchQuery) {
-        filterTracks(rankedTracks, state.searchQuery)
+    val libraryTracks = remember(state.selectedTab, showNowPlaying, state.tracks, state.searchQuery) {
+        if (state.selectedTab == Tab.Library && !showNowPlaying) filterTracks(state.tracks, state.searchQuery) else emptyList()
     }
+    val libraryBrowseData = remember(state.libraryBrowseMode, libraryTracks) {
+        buildLibraryBrowseData(state.libraryBrowseMode, libraryTracks)
+    }
+    val needsDiscoveryTracks = state.selectedTab == Tab.Library && !showNowPlaying
     val discoveryTracks = remember(
-        visibleTracks,
+        needsDiscoveryTracks,
+        libraryTracks,
         state.discoveryFilter,
         state.liked,
         state.skips,
         state.longListens,
         state.currentTrack.id
     ) {
-        discoveryTracks(
-            tracks = visibleTracks,
-            filter = state.discoveryFilter,
-            liked = state.liked,
-            skips = state.skips,
-            longListens = state.longListens,
-            currentTrack = state.currentTrack
-        )
+        if (needsDiscoveryTracks) {
+            discoveryTracks(
+                tracks = libraryTracks,
+                filter = state.discoveryFilter,
+                liked = state.liked,
+                skips = state.skips,
+                longListens = state.longListens,
+                currentTrack = state.currentTrack
+            )
+        } else {
+            emptyList()
+        }
     }
-    val recentTracks = remember(state.recentTrackIds, state.tracks) {
-        state.recentTracks()
+    val recentTracks = remember(needsFullMixes, state.recentTrackIds, state.tracks) {
+        if (needsFullMixes) state.recentTracks() else emptyList()
     }
-    val recentTrackPlays = remember(state.recentTrackIds, state.tracks) {
-        state.recentTrackPlays()
+    val recentTrackPlays = remember(homeOnly, state.recentTrackIds, state.tracks) {
+        if (homeOnly) state.recentTrackPlays() else emptyList()
     }
     val needsVibeMixes = state.selectedTab == Tab.Mixes && state.mixesSegment == MixesSegment.Vibes && !showNowPlaying
     val vibeMixes = remember(needsVibeMixes, state.tracks, state.vibeQuery, state.liked, state.longListens, state.localPlays, state.audioFeatures) {
@@ -1528,7 +1590,6 @@ private fun JellyMixApp(
             emptyList()
         }
     }
-    val needsFullMixes = showNowPlaying || state.selectedTab == Tab.Mixes
     val mixes = remember(needsFullMixes, rankedTracks, state.liked, state.longListens, state.skips, state.localPlays, recentTracks, state.audioFeatures) {
         if (needsFullMixes) {
             buildMixes(
@@ -1544,6 +1605,9 @@ private fun JellyMixApp(
             buildHomeSpeedDialMixesFast(rankedTracks, state.liked, state.longListens, state.skips, state.localPlays, state.audioFeatures)
         }
     }
+    val homeSpeedDial = remember(mixes) { homeSpeedDialMixes(mixes) }
+    val homeRecentPlays = remember(recentTrackPlays) { recentTrackPlays.take(10) }
+    val homeHeavyRotation = remember(rankedTracks) { rankedTracks.take(10) }
 
     Scaffold(
         bottomBar = {
@@ -1586,7 +1650,7 @@ private fun JellyMixApp(
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 if (state.shouldShowConnectionCard && !showNowPlaying) {
-                    item {
+                    item(contentType = "connection") {
                     ConnectionCard(
                         state = state,
                         onServerUrlChange = viewModel::setServerUrl,
@@ -1602,10 +1666,11 @@ private fun JellyMixApp(
                     }
                 }
                 if (showNowPlaying) {
-                    item {
+                    item(contentType = "now-playing") {
                         NowPlayingPage(
                             state = state,
                             mixes = mixes,
+                            frameBus = viewModel.visualizerFrameBus,
                             onPlayPause = viewModel::togglePlayPause,
                             onLike = viewModel::toggleLike,
                             onPrevious = viewModel::previous,
@@ -1625,7 +1690,7 @@ private fun JellyMixApp(
                     }
                 } else when (state.selectedTab) {
                     Tab.Home -> {
-                        item {
+                        item(contentType = "home-now") {
                             HomeNowCard(
                                 state = state,
                                 onOpenNowPlaying = { showNowPlaying = true },
@@ -1636,28 +1701,28 @@ private fun JellyMixApp(
                                 onStartRadio = viewModel::startRadioFromCurrent
                             )
                         }
-                        item { SpeedDialGrid(homeSpeedDialMixes(mixes), viewModel::startQueue) }
-                        if (recentTrackPlays.isNotEmpty()) {
-                            item { RecentTrackRail("Recently played", recentTrackPlays.take(10), viewModel::selectTrack) }
+                        item(contentType = "speed-dial") { SpeedDialGrid(homeSpeedDial, viewModel::startQueue) }
+                        if (homeRecentPlays.isNotEmpty()) {
+                            item(contentType = "track-rail") { RecentTrackRail("Recently played", homeRecentPlays, viewModel::selectTrack) }
                         }
-                        item { TrackRail("Heavy rotation", visibleTracks.take(10), viewModel::selectTrack) }
+                        item(contentType = "track-rail") { TrackRail("Heavy rotation", homeHeavyRotation, viewModel::selectTrack) }
                     }
                     Tab.Mixes -> {
-                        item { MixesSegmentControl(state.mixesSegment, viewModel::setMixesSegment) }
+                        item(contentType = "segment") { MixesSegmentControl(state.mixesSegment, viewModel::setMixesSegment) }
                         when (state.mixesSegment) {
-                            MixesSegment.Mixes -> items(mixes, key = { it.name }) { mix ->
+                            MixesSegment.Mixes -> items(mixes, key = { it.name }, contentType = { "mix-card" }) { mix ->
                                 PlaylistCard(mix, state.liked, viewModel::startQueue, viewModel::startShuffledQueue, viewModel::selectTrack)
                             }
                             MixesSegment.Vibes -> {
-                                item {
+                                item(contentType = "vibe-search") {
                                     VibeSearchCard(
                                         query = state.vibeQuery,
                                         onQueryChange = viewModel::setVibeQuery,
                                         resultCount = vibeMixes.size
                                     )
                                 }
-                                item { VibeChipRow(state.vibeQuery, viewModel::setVibeQuery) }
-                                items(vibeMixes, key = { it.name }) { vibe ->
+                                item(contentType = "chips") { VibeChipRow(state.vibeQuery, viewModel::setVibeQuery) }
+                                items(vibeMixes, key = { it.name }, contentType = { "vibe-card" }) { vibe ->
                                     VibeMixCard(
                                         mix = vibe,
                                         liked = state.liked,
@@ -1669,12 +1734,12 @@ private fun JellyMixApp(
                             }
                             MixesSegment.Yours -> {
                                 if (state.jellyfinPlaylists.isNotEmpty()) {
-                                    item { JellyfinPlaylistRail(state.jellyfinPlaylists, viewModel::openPlaylist) }
+                                    item(contentType = "playlist-rail") { JellyfinPlaylistRail(state.jellyfinPlaylists, viewModel::openPlaylist) }
                                 } else {
-                                    item { EmptyState("No Jellyfin playlists", "Server playlists and user-created mixes will appear here.") }
+                                    item(contentType = "empty") { EmptyState("No Jellyfin playlists", "Server playlists and user-created mixes will appear here.") }
                                 }
                                 state.selectedPlaylist?.let { playlist ->
-                                    item {
+                                    item(contentType = "selected-playlist") {
                                         SelectedPlaylistSection(
                                             playlist = playlist,
                                             tracks = state.selectedPlaylistTracks,
@@ -1684,12 +1749,12 @@ private fun JellyMixApp(
                                         )
                                     }
                                 }
-                                item { EmptyState("User-created mixes", "Saved personal mixes can live here when creation is added.") }
+                                item(contentType = "empty") { EmptyState("User-created mixes", "Saved personal mixes can live here when creation is added.") }
                             }
                         }
                     }
                     Tab.Discover -> {
-                        item {
+                        item(contentType = "jarvis") {
                             JarvisDjCard(
                                 state = state,
                                 onDraftChange = viewModel::setDjDraft,
@@ -1698,23 +1763,27 @@ private fun JellyMixApp(
                                 onModeSelected = viewModel::applyGuestDjMode
                             )
                         }
-                        item { JarvisResultsSection(state, viewModel::sendDjPrompt, viewModel::selectTrack) }
+                        item(contentType = "jarvis-results") { JarvisResultsSection(state, viewModel::sendDjPrompt, viewModel::selectTrack) }
                     }
                     Tab.Library -> {
-                        val libraryTracks = filterTracks(state.tracks, state.searchQuery)
-                        item { SearchCard(state.searchQuery, viewModel::setSearchQuery, visibleTracks.size) }
-                        item { LibraryBrowseSegmentControl(state.libraryBrowseMode, viewModel::setLibraryBrowseMode) }
-                        item { LibrarySummary(libraryTracks, state.rawTrackCount) }
-                        item { LibraryActions(libraryTracks, state.libraryBrowseMode, viewModel::startQueue, viewModel::startShuffledQueue) }
+                        item(contentType = "search") { SearchCard(state.searchQuery, viewModel::setSearchQuery, libraryTracks.size) }
+                        item(contentType = "segment") { LibraryBrowseSegmentControl(state.libraryBrowseMode, viewModel::setLibraryBrowseMode) }
+                        item(contentType = "library-summary") { LibrarySummary(libraryTracks, state.rawTrackCount) }
+                        item(contentType = "library-actions") { LibraryActions(libraryTracks, state.libraryBrowseMode, viewModel::startQueue, viewModel::startShuffledQueue) }
                         libraryBrowseContent(
-                            mode = state.libraryBrowseMode,
-                            tracks = libraryTracks,
+                            data = libraryBrowseData,
                             liked = state.liked,
                             onTrackSelected = viewModel::selectTrack,
                             onQueueSelected = viewModel::startQueue
                         )
-                        item { SavedDiscoveryFilters(viewModel::setDiscoveryFilter) }
-                        item { TrackSection(state.discoveryFilter.sectionTitle, discoveryTracks, state.liked, viewModel::selectTrack) }
+                        item(contentType = "chips") { SavedDiscoveryFilters(viewModel::setDiscoveryFilter) }
+                        trackRowsSection(
+                            title = state.discoveryFilter.sectionTitle,
+                            tracks = discoveryTracks,
+                            liked = state.liked,
+                            keyPrefix = "discovery",
+                            onTrackSelected = viewModel::selectTrack
+                        )
                     }
                 }
             }
@@ -1815,9 +1884,14 @@ private fun HeartIcon(liked: Boolean, modifier: Modifier = Modifier) {
 
 @Composable
 private fun TrackSubtitleLine(track: Track, modifier: Modifier = Modifier) {
-    val artist = track.artist.cleanUnknown("Unknown Artist").ifBlank { track.filename.orEmpty() }
-    val album = track.album.cleanUnknown("Unknown Album").trimTrailingOpenParen()
-    val genre = track.genre.takeIf { album.isBlank() && it.isNotBlank() && it.lowercase() !in internalGenreLabels }.orEmpty()
+    val (artist, album, genre) = remember(track.id, track.artist, track.album, track.genre, track.filename) {
+        val cleanArtist = track.artist.cleanUnknown("Unknown Artist").ifBlank { track.filename.orEmpty() }
+        val cleanAlbum = track.album.cleanUnknown("Unknown Album").trimTrailingOpenParen()
+        val cleanGenre = track.genre
+            .takeIf { cleanAlbum.isBlank() && it.isNotBlank() && it.lowercase() !in internalGenreLabels }
+            .orEmpty()
+        Triple(cleanArtist, cleanAlbum, cleanGenre)
+    }
     Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
         if (artist.isNotBlank()) {
             Text(
@@ -1967,6 +2041,7 @@ private fun SpeedDialTile(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val gradientBrush = remember(mix.name) { Brush.linearGradient(mixGradient(mix.name)) }
     Card(
         modifier = modifier.clickable(onClick = onClick),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -1979,12 +2054,23 @@ private fun SpeedDialTile(
             Box(
                 modifier = Modifier
                     .matchParentSize()
-                    .background(Brush.linearGradient(mixGradient(mix.name)))
+                    .background(gradientBrush)
             )
             val imageUrl = mix.tracks.firstOrNull { !it.imageUrl.isNullOrBlank() }?.imageUrl
-            if (!imageUrl.isNullOrBlank()) {
+            val context = LocalContext.current
+            val imageSizePx = with(LocalDensity.current) { 256.dp.roundToPx() }
+            val imageRequest = remember(imageUrl, imageSizePx) {
+                imageUrl?.takeIf { it.isNotBlank() }?.let { url ->
+                    ImageRequest.Builder(context)
+                        .data(url)
+                        .size(imageSizePx)
+                        .crossfade(false)
+                        .build()
+                }
+            }
+            if (imageRequest != null) {
                 AsyncImage(
-                    model = imageUrl,
+                    model = imageRequest,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.matchParentSize()
@@ -2278,6 +2364,7 @@ private fun MusicVisualizer(
     isPlaying: Boolean,
     frame: AudioAnalysisFrame = ambientFrame(),
     modifier: Modifier = Modifier,
+    frameBus: VisualizerFrameBus? = null,
     compact: Boolean = false,
     useFeedbackTunnel: Boolean = false,
     fullscreen: Boolean = false,
@@ -2293,6 +2380,7 @@ private fun MusicVisualizer(
                 frame = frame,
                 palette = effectivePalette,
                 isPlaying = isPlaying,
+                frameBus = frameBus,
                 modifier = Modifier.fillMaxSize(),
                 intensity = when (mode) {
                     VisualizerRenderMode.Fluid -> if (compact) 0.58f else 0.86f
@@ -2694,16 +2782,28 @@ private fun GuestDjModeCard(selected: GuestDjMode, onModeSelected: (GuestDjMode)
 private fun MixArtwork(mix: Mix) {
     val tracks = mix.tracks.take(4)
     val imageUrl = tracks.firstOrNull { !it.imageUrl.isNullOrBlank() }?.imageUrl
+    val gradientBrush = remember(mix.name) { Brush.linearGradient(mixGradient(mix.name)) }
+    val context = LocalContext.current
+    val imageSizePx = with(LocalDensity.current) { 126.dp.roundToPx() }
+    val imageRequest = remember(imageUrl, imageSizePx) {
+        imageUrl?.takeIf { it.isNotBlank() }?.let { url ->
+            ImageRequest.Builder(context)
+                .data(url)
+                .size(imageSizePx)
+                .crossfade(false)
+                .build()
+        }
+    }
     Box(
         modifier = Modifier
             .size(126.dp)
             .height(126.dp)
             .clip(RoundedCornerShape(8.dp))
-            .background(Brush.linearGradient(mixGradient(mix.name)))
+            .background(gradientBrush)
     ) {
-        if (!imageUrl.isNullOrBlank()) {
+        if (imageRequest != null) {
             AsyncImage(
-                model = imageUrl,
+                model = imageRequest,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.matchParentSize()
@@ -2739,7 +2839,7 @@ private fun MixRail(
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         SectionHeader(title)
         LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(mixes, key = { it.name }) { mix ->
+            items(mixes, key = { it.name }, contentType = { "mix-rail-card" }) { mix ->
                 Card(
                     modifier = Modifier
                         .width(244.dp)
@@ -2780,7 +2880,7 @@ private fun TrackRail(title: String, tracks: List<Track>, onTrackSelected: (Trac
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         SectionHeader(title)
         LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(tracks, key = { it.id }) { track ->
+            items(tracks, key = { it.id }, contentType = { "track-rail-card" }) { track ->
                 Card(
                     modifier = Modifier
                         .width(148.dp)
@@ -2803,7 +2903,7 @@ private fun RecentTrackRail(title: String, plays: List<RecentTrackPlay>, onTrack
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         SectionHeader(title)
         LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(plays, key = { it.track.id }) { play ->
+            items(plays, key = { it.track.id }, contentType = { "recent-track-card" }) { play ->
                 Card(
                     modifier = Modifier
                         .width(154.dp)
@@ -2837,25 +2937,79 @@ private fun TrackSection(title: String, tracks: List<Track>, liked: Map<String, 
     }
 }
 
-private fun LazyListScope.libraryBrowseContent(
-    mode: LibraryBrowseMode,
+private fun LazyListScope.trackRowsSection(
+    title: String,
     tracks: List<Track>,
     liked: Map<String, Boolean>,
-    onTrackSelected: (Track) -> Unit,
-    onQueueSelected: (String, List<Track>) -> Unit
+    keyPrefix: String,
+    onTrackSelected: (Track) -> Unit
 ) {
-    val canonical = deduplicateTracks(tracks)
-    when (mode) {
-        LibraryBrowseMode.Tracks -> item {
-            TrackSection("Tracks", canonical.sortedBy { it.title.lowercase() }, liked, onTrackSelected)
+    item(key = "$keyPrefix-header", contentType = "section-header") { SectionHeader(title) }
+    if (tracks.isEmpty()) {
+        item(key = "$keyPrefix-empty", contentType = "empty") {
+            EmptyState("No matching tracks", "Try another search or reload your Jellyfin library.")
         }
-        LibraryBrowseMode.Artists -> {
-            val artists = canonical
+    } else {
+        items(tracks, key = { "$keyPrefix-${it.id}" }, contentType = { "track-row" }) { track ->
+            TrackRow(track, liked.isLiked(track)) { onTrackSelected(track) }
+        }
+    }
+}
+
+private data class LibraryBrowseData(
+    val mode: LibraryBrowseMode,
+    val tracks: List<Track> = emptyList(),
+    val artists: List<Pair<String, List<Track>>> = emptyList(),
+    val albums: List<Pair<String, List<Track>>> = emptyList(),
+    val genres: List<Pair<String, List<Track>>> = emptyList()
+)
+
+private fun buildLibraryBrowseData(mode: LibraryBrowseMode, tracks: List<Track>): LibraryBrowseData {
+    val canonical = deduplicateTracks(tracks)
+    return when (mode) {
+        LibraryBrowseMode.Tracks -> LibraryBrowseData(
+            mode = mode,
+            tracks = canonical.sortedBy { it.title.lowercase() }
+        )
+        LibraryBrowseMode.Artists -> LibraryBrowseData(
+            mode = mode,
+            artists = canonical
                 .filter { it.artist.isNotBlank() }
                 .groupBy { it.artist }
                 .toSortedMap(String.CASE_INSENSITIVE_ORDER)
                 .toList()
-            items(artists, key = { it.first }) { (artist, artistTracks) ->
+        )
+        LibraryBrowseMode.Albums -> LibraryBrowseData(
+            mode = mode,
+            albums = canonical
+                .filter { it.album.isNotBlank() }
+                .groupBy { it.album }
+                .toSortedMap(String.CASE_INSENSITIVE_ORDER)
+                .toList()
+        )
+        LibraryBrowseMode.Genres -> LibraryBrowseData(
+            mode = mode,
+            genres = canonical
+                .filter { it.genre.isNotBlank() }
+                .groupBy { it.genre }
+                .toSortedMap(String.CASE_INSENSITIVE_ORDER)
+                .toList()
+        )
+    }
+}
+
+private fun LazyListScope.libraryBrowseContent(
+    data: LibraryBrowseData,
+    liked: Map<String, Boolean>,
+    onTrackSelected: (Track) -> Unit,
+    onQueueSelected: (String, List<Track>) -> Unit
+) {
+    when (data.mode) {
+        LibraryBrowseMode.Tracks -> {
+            trackRowsSection("Tracks", data.tracks, liked, keyPrefix = "library", onTrackSelected = onTrackSelected)
+        }
+        LibraryBrowseMode.Artists -> {
+            items(data.artists, key = { it.first }, contentType = { "library-group" }) { (artist, artistTracks) ->
                 LibraryGroupCard(
                     title = artist,
                     subtitle = "${artistTracks.size} tracks",
@@ -2867,12 +3021,7 @@ private fun LazyListScope.libraryBrowseContent(
             }
         }
         LibraryBrowseMode.Albums -> {
-            val albums = canonical
-                .filter { it.album.isNotBlank() }
-                .groupBy { it.album }
-                .toSortedMap(String.CASE_INSENSITIVE_ORDER)
-                .toList()
-            items(albums, key = { it.first }) { (album, albumTracks) ->
+            items(data.albums, key = { it.first }, contentType = { "library-group" }) { (album, albumTracks) ->
                 val artist = albumTracks.groupingBy { it.artist }.eachCount().maxByOrNull { it.value }?.key.orEmpty()
                 LibraryGroupCard(
                     title = album,
@@ -2885,12 +3034,7 @@ private fun LazyListScope.libraryBrowseContent(
             }
         }
         LibraryBrowseMode.Genres -> {
-            val genres = canonical
-                .filter { it.genre.isNotBlank() }
-                .groupBy { it.genre }
-                .toSortedMap(String.CASE_INSENSITIVE_ORDER)
-                .toList()
-            items(genres, key = { it.first }) { (genre, genreTracks) ->
+            items(data.genres, key = { it.first }, contentType = { "library-group" }) { (genre, genreTracks) ->
                 LibraryGroupCard(
                     title = genre,
                     subtitle = "${genreTracks.size} tracks",
@@ -3266,7 +3410,7 @@ private fun JellyfinPlaylistRail(playlists: List<JellyfinPlaylist>, onPlaylistSe
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         SectionHeader("Jellyfin playlists")
         LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(playlists, key = { it.id }) { playlist ->
+            items(playlists, key = { it.id }, contentType = { "playlist-card" }) { playlist ->
                 Card(
                     modifier = Modifier
                         .width(180.dp)
@@ -3366,6 +3510,7 @@ private fun StatCard(label: String, value: String, modifier: Modifier = Modifier
 private fun NowPlayingPage(
     state: JellyMixState,
     mixes: List<Mix>,
+    frameBus: VisualizerFrameBus,
     onPlayPause: () -> Unit,
     onLike: () -> Unit,
     onPrevious: () -> Unit,
@@ -3393,6 +3538,7 @@ private fun NowPlayingPage(
                     track = track,
                     bands = state.visualizerBands,
                     frame = state.audioFrame,
+                    frameBus = frameBus,
                     isPlaying = state.isPlaying,
                     debugOverlay = state.visualizerDebugOverlay,
                     showVisualizer = showVisualizerStage,
@@ -3486,6 +3632,7 @@ private fun NowPlayingPage(
         FullscreenVisualizerDialog(
             track = track,
             frame = state.audioFrame,
+            frameBus = frameBus,
             isPlaying = state.isPlaying,
             debugOverlay = state.visualizerDebugOverlay,
             onPrevious = onPrevious,
@@ -3502,12 +3649,21 @@ private fun NowPlayingStage(
     track: Track,
     bands: List<Float>,
     frame: AudioAnalysisFrame,
+    frameBus: VisualizerFrameBus,
     isPlaying: Boolean,
     debugOverlay: Boolean,
     showVisualizer: Boolean,
     onToggle: () -> Unit,
     onFullscreen: () -> Unit
 ) {
+    val primary = MaterialTheme.colorScheme.primary
+    val secondary = MaterialTheme.colorScheme.secondary
+    val tertiary = MaterialTheme.colorScheme.tertiary
+    val basePalette = remember(track.genre) { coverColors(track.genre) }
+    val visualizerPalette = remember(track.genre, primary, secondary, tertiary) {
+        basePalette + listOf(primary, secondary, tertiary)
+    }
+    val visualizerBackground = remember(track.genre) { Brush.radialGradient(basePalette) }
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxWidth()
@@ -3521,7 +3677,7 @@ private fun NowPlayingStage(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Brush.radialGradient(coverColors(track.genre)))
+                    .background(visualizerBackground)
                     .padding(0.dp),
                 contentAlignment = Alignment.Center
             ) {
@@ -3529,10 +3685,11 @@ private fun NowPlayingStage(
                     bands = bands,
                     isPlaying = isPlaying,
                     frame = frame,
+                    frameBus = frameBus,
                     useFeedbackTunnel = true,
                     fullscreen = false,
                     debugOverlay = debugOverlay,
-                    palette = coverColors(track.genre) + listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.secondary, MaterialTheme.colorScheme.tertiary),
+                    palette = visualizerPalette,
                     modifier = Modifier.fillMaxSize()
                 )
             }
@@ -3556,6 +3713,7 @@ private fun NowPlayingStage(
 private fun FullscreenVisualizerDialog(
     track: Track,
     frame: AudioAnalysisFrame,
+    frameBus: VisualizerFrameBus,
     isPlaying: Boolean,
     debugOverlay: Boolean,
     onPrevious: () -> Unit,
@@ -3566,6 +3724,12 @@ private fun FullscreenVisualizerDialog(
 ) {
     val view = LocalView.current
     val context = LocalContext.current
+    val primary = MaterialTheme.colorScheme.primary
+    val secondary = MaterialTheme.colorScheme.secondary
+    val tertiary = MaterialTheme.colorScheme.tertiary
+    val visualizerPalette = remember(track.genre, primary, secondary, tertiary) {
+        coverColors(track.genre) + listOf(primary, secondary, tertiary)
+    }
     var overlayVisible by remember(track.id) { mutableStateOf(true) }
     var mode by remember(track.id) { mutableStateOf(VisualizerRenderMode.FeedbackTunnel) }
     var dragX by remember(track.id) { mutableStateOf(0f) }
@@ -3618,9 +3782,10 @@ private fun FullscreenVisualizerDialog(
             MusicVisualizer(
                 bands = frame.bands,
                 frame = frame,
+                frameBus = frameBus,
                 isPlaying = isPlaying,
                 useFeedbackTunnel = true,
-                palette = coverColors(track.genre) + listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.secondary, MaterialTheme.colorScheme.tertiary),
+                palette = visualizerPalette,
                 mode = mode,
                 debugOverlay = debugOverlay,
                 fullscreen = true,
@@ -3843,14 +4008,28 @@ private fun PlayerBar(
 
 @Composable
 private fun AlbumArt(track: Track, size: Int = 54, showProgress: Boolean = false) {
-    val colors = coverColors(track.genre).let { base ->
-        if (track.imageUrl.isNullOrBlank()) mixGradient("${track.title}:${track.artist}") else base
+    val context = LocalContext.current
+    val imageSizePx = with(LocalDensity.current) { size.dp.roundToPx() }
+    val imageRequest = remember(track.imageUrl, imageSizePx) {
+        track.imageUrl?.takeIf { it.isNotBlank() }?.let { url ->
+            ImageRequest.Builder(context)
+                .data(url)
+                .size(imageSizePx)
+                .crossfade(false)
+            .build()
+        }
+    }
+    val fallbackBrush = remember(track.id, track.genre, track.imageUrl, track.title, track.artist) {
+        val colors = coverColors(track.genre).let { base ->
+            if (track.imageUrl.isNullOrBlank()) mixGradient("${track.title}:${track.artist}") else base
+        }
+        Brush.linearGradient(colors)
     }
     Box(
         modifier = Modifier
             .size(size.dp)
             .clip(RoundedCornerShape(8.dp))
-            .background(Brush.linearGradient(colors)),
+            .background(fallbackBrush),
         contentAlignment = Alignment.Center
     ) {
         Box(
@@ -3859,9 +4038,9 @@ private fun AlbumArt(track: Track, size: Int = 54, showProgress: Boolean = false
                 .clip(CircleShape)
                 .background(Color(0xCC101113))
         )
-        if (!track.imageUrl.isNullOrBlank()) {
+        if (imageRequest != null) {
             AsyncImage(
-                model = track.imageUrl,
+                model = imageRequest,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
@@ -3890,17 +4069,31 @@ private fun AlbumArt(track: Track, size: Int = 54, showProgress: Boolean = false
 
 @Composable
 private fun PlaylistArt(playlist: JellyfinPlaylist) {
+    val context = LocalContext.current
+    val primary = MaterialTheme.colorScheme.primary
+    val secondary = MaterialTheme.colorScheme.secondary
+    val gradientBrush = remember(primary, secondary) { Brush.linearGradient(listOf(primary, secondary)) }
+    val imageSizePx = with(LocalDensity.current) { 116.dp.roundToPx() }
+    val imageRequest = remember(playlist.imageUrl, imageSizePx) {
+        playlist.imageUrl?.takeIf { it.isNotBlank() }?.let { url ->
+            ImageRequest.Builder(context)
+                .data(url)
+                .size(imageSizePx)
+                .crossfade(false)
+                .build()
+        }
+    }
     Box(
         modifier = Modifier
             .size(116.dp)
             .clip(RoundedCornerShape(8.dp))
-            .background(Brush.linearGradient(listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.secondary))),
+            .background(gradientBrush),
         contentAlignment = Alignment.Center
     ) {
         Icon(Icons.AutoMirrored.Filled.PlaylistPlay, contentDescription = null, tint = Color(0xFF101113), modifier = Modifier.size(42.dp))
-        if (!playlist.imageUrl.isNullOrBlank()) {
+        if (imageRequest != null) {
             AsyncImage(
-                model = playlist.imageUrl,
+                model = imageRequest,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
@@ -3956,6 +4149,7 @@ enum class GuestDjMode(val label: String, val description: String) {
     Chill("Chill", "I will soften the queue toward calm, warm, ambient, and lower-pressure songs.")
 }
 
+@Immutable
 data class JellyMixState(
     val serverUrl: String,
     val username: String,
@@ -4043,10 +4237,12 @@ data class JellyMixState(
     }
 }
 
+@Immutable
 data class RecentTrackPlay(val track: Track, val count: Int)
 
 private fun Map<String, Boolean>.isLiked(track: Track): Boolean = this[track.id] ?: track.liked
 
+@Immutable
 data class Track(
     val id: String,
     val title: String,
@@ -4066,6 +4262,7 @@ data class Track(
     val alternates: List<TrackAlternate> = emptyList()
 )
 
+@Immutable
 data class TrackAlternate(
     val id: String,
     val title: String,
@@ -4076,10 +4273,12 @@ data class TrackAlternate(
     val imageUrl: String? = null
 )
 
+@Immutable
 data class TrackSubtitle(val segments: List<String>) {
     val text: String = segments.filter { it.isNotBlank() }.joinToString(" • ")
 }
 
+@Immutable
 data class TrackAudioFeatures(
     val bpm: Float,
     val rmsEnergy: Float,
@@ -4104,6 +4303,7 @@ private data class TrackDedupKey(
     val artist: String
 )
 
+@Immutable
 data class Mix(
     val name: String,
     val reason: String,
@@ -4111,6 +4311,7 @@ data class Mix(
     val note: String? = null
 )
 
+@Immutable
 data class VibeProfile(
     val name: String,
     val aliases: Set<String>,
@@ -4119,8 +4320,10 @@ data class VibeProfile(
     val reason: String
 )
 
+@Immutable
 data class DjMessage(val speaker: String, val text: String)
 
+@Immutable
 data class JellyfinPlaylist(val id: String, val name: String, val childCount: Int, val imageUrl: String?)
 
 private data class JellyfinSession(val token: String, val userId: String)
@@ -4129,7 +4332,6 @@ private data class JellyfinLibraryLoad(val tracks: List<Track>, val playlists: L
 
 private data class PreparedLibraryState(
     val tracks: List<Track>,
-    val features: Map<String, TrackAudioFeatures>,
     val liked: Map<String, Boolean>,
     val skips: Map<String, Int>,
     val longListens: Map<String, Int>,

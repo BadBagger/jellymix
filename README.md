@@ -106,6 +106,17 @@ Debug APK:
 - `JellyMix-debug.apk`
 - `app/build/outputs/apk/debug/app-debug.apk`
 
+Profileable APK for performance testing:
+
+```powershell
+.\gradlew.bat :app:assembleProfile
+adb install -r app\build\outputs\apk\profile\app-profile.apk
+adb shell am start -W -n com.smithware.jellymix/.MainActivity
+```
+
+- `app/build/outputs/apk/profile/app-profile.apk`
+- Uses debug signing for easy install, keeps `com.smithware.jellymix`, disables debug-only Compose tooling, and is profileable for Android Studio/Perfetto traces.
+
 Latest copied debug APK size: 25,635,481 bytes.
 
 ## Test release
