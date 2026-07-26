@@ -23,6 +23,52 @@ data class AudioAnalysisFrame(
     val live: Boolean
 )
 
+data class VisualizerDebugStats(
+    val fps: Float = 0f,
+    val meanLuminance: Float = 0f,
+    val resetCount: Int = 0,
+    val bands: List<Float> = emptyList(),
+    val live: Boolean = false,
+    val mode: VisualizerRenderMode = VisualizerRenderMode.FeedbackTunnel
+)
+
+class FeedbackSafetyMonitor(
+    private val highLuminanceThreshold: Float = 0.85f,
+    private val highFrameLimit: Int = 30
+) {
+    var meanLuminance: Float = 0.02f
+        private set
+    var resetCount: Int = 0
+        private set
+    private var highFrames = 0
+
+    fun advance(decay: Float, injectedEnergy: Float): Boolean {
+        meanLuminance = (meanLuminance * decay.coerceIn(0.88f, 0.98f) + injectedEnergy.coerceIn(0f, 0.08f))
+            .coerceIn(0f, 0.92f)
+        if (meanLuminance > highLuminanceThreshold) {
+            highFrames++
+        } else {
+            highFrames = 0
+        }
+        if (highFrames > highFrameLimit) {
+            reset()
+            return true
+        }
+        return false
+    }
+
+    fun forceMeanForTest(value: Float) {
+        meanLuminance = value.coerceIn(0f, 1f)
+        highFrames = 0
+    }
+
+    fun reset() {
+        meanLuminance = 0.02f
+        highFrames = 0
+        resetCount++
+    }
+}
+
 class VisualizerAnalysisEngine(
     private val bandCount: Int = 48,
     private val attackMs: Float = 15f,
@@ -96,9 +142,10 @@ class VisualizerAnalysisEngine(
                 totalMagnitude += mag
             }
             val average = sum / (end - start).coerceAtLeast(1)
-            val db = 20f * log10((average + 1f) / 128f)
-            rollingMaxDb = maxOf(rollingMaxDb * 0.995f, db, -48f)
-            val normalized = ((db - (rollingMaxDb - 42f)) / 42f).coerceIn(0.04f, 1f)
+            val db = 20f * log10((average + 1f).coerceAtLeast(1f) / 128f)
+            rollingMaxDb = maxOf(rollingMaxDb * 0.995f, db, -42f)
+            val normalizerFloor = (rollingMaxDb - 42f).coerceAtMost(-12f)
+            val normalized = ((db - normalizerFloor) / 42f).coerceIn(0.04f, 1f)
             val coeff = if (normalized > envelopes[band]) attack else release
             envelopes[band] += (normalized - envelopes[band]) * coeff
             bandValues[band] = envelopes[band].coerceIn(0.04f, 1f)

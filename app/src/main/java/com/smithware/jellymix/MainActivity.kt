@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.content.pm.PackageManager
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -27,6 +28,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -50,6 +52,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -57,7 +60,9 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -70,9 +75,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -80,16 +85,21 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.PlainTooltip
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TooltipBox
 import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -106,6 +116,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -130,6 +142,7 @@ import kotlin.math.absoluteValue
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -139,6 +152,7 @@ internal const val WIDGET_ACTION_PLAY_PAUSE = "com.smithware.jellymix.widget.PLA
 internal const val WIDGET_ACTION_SKIP = "com.smithware.jellymix.widget.SKIP"
 internal const val WIDGET_ACTION_PREVIOUS = "com.smithware.jellymix.widget.PREVIOUS"
 internal const val WIDGET_ACTION_STOP = "com.smithware.jellymix.widget.STOP"
+private const val DefaultJarvisPrompt = "Tell me what you want to hear. I can go deeper, keep it familiar, make it louder, chill it out, or build around an artist."
 
 class MainActivity : ComponentActivity() {
     private val viewModel: JellyMixViewModel by viewModels()
@@ -243,6 +257,8 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 userId = userId,
                 themeMode = prefs.getString("themeMode", null).enumValueOrDefault(ThemeMode.Dark),
                 accentTheme = prefs.getString("accentTheme", null).enumValueOrDefault(AccentTheme.Jelly),
+                visualizerDebugOverlay = prefs.getBoolean("visualizerDebugOverlay", false),
+                nowPlayingVisualizerStage = prefs.getBoolean("nowPlayingVisualizerStage", false),
                 selectedTab = prefs.getString("selectedTab", null).toTabOrDefault(Tab.Home),
                 mixesSegment = prefs.getString("mixesSegment", null).enumValueOrDefault(MixesSegment.Mixes),
                 libraryBrowseMode = prefs.getString("libraryBrowseMode", null).enumValueOrDefault(LibraryBrowseMode.Tracks),
@@ -327,6 +343,16 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         prefs.edit().putString("accentTheme", value.name).apply()
     }
 
+    fun setVisualizerDebugOverlay(value: Boolean) {
+        state = state.copy(visualizerDebugOverlay = value)
+        prefs.edit().putBoolean("visualizerDebugOverlay", value).apply()
+    }
+
+    fun setNowPlayingVisualizerStage(value: Boolean) {
+        state = state.copy(nowPlayingVisualizerStage = value)
+        prefs.edit().putBoolean("nowPlayingVisualizerStage", value).apply()
+    }
+
     fun setVisualizerPermission(granted: Boolean) {
         val message = if (granted) {
             "Audio visualizer is ready for Jellyfin playback."
@@ -341,6 +367,17 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
 
     fun refreshPlaybackNotification() {
         playbackNotificationController.update(state)
+    }
+
+    fun seekToProgress(progress: Float) {
+        val clamped = progress.coerceIn(0f, 1f)
+        val durationMs = (state.currentTrack.durationSec * 1000L).coerceAtLeast(1L)
+        runCatching {
+            player?.seekTo((durationMs * clamped).toInt())
+        }
+        state = state.copy(currentTrack = state.currentTrack.copy(completion = clamped))
+        refreshPlaybackNotification()
+        persistPlaybackState()
     }
 
     fun connect() {
@@ -808,7 +845,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             queueTitle = "Discovery queue",
             djMode = GuestDjMode.Flow,
             djDraft = "",
-            djMessages = listOf(DjMessage("Jarvis", "Tell me what you want to hear. I can go deeper, keep it familiar, make it louder, chill it out, or build around an artist.")),
+            djMessages = listOf(DjMessage("Jarvis", DefaultJarvisPrompt)),
             jellyfinPlaylists = emptyList(),
             selectedPlaylist = null,
             selectedPlaylistTracks = emptyList(),
@@ -1192,10 +1229,10 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun recordPlayStart(track: Track) {
-        val recent = listOf(track.id) + state.recentTrackIds.filterNot { it == track.id }
+        val recent = listOf(track.id) + state.recentTrackIds
         state = state.copy(
             localPlays = state.localPlays + (track.id to ((state.localPlays[track.id] ?: 0) + 1)),
-            recentTrackIds = recent.take(30)
+            recentTrackIds = recent.take(60)
         )
         persistSignals()
     }
@@ -1406,6 +1443,7 @@ private fun JellyMixApp(
         currentTrack = state.currentTrack
     )
     val recentTracks = state.recentTracks()
+    val recentTrackPlays = state.recentTrackPlays()
     val vibeMixes = buildVibeMixes(deduplicateTracks(state.tracks), state.vibeQuery, state.liked, state.longListens, state.localPlays, state.audioFeatures)
     val mixes = buildMixes(
         rankedTracks,
@@ -1418,9 +1456,6 @@ private fun JellyMixApp(
     )
 
     Scaffold(
-        topBar = {
-            CenterAlignedTopAppBar(title = { Text("JellyMix", fontWeight = FontWeight.Bold) })
-        },
         bottomBar = {
             NavigationBar {
                 Tab.entries.forEach { tab ->
@@ -1431,7 +1466,14 @@ private fun JellyMixApp(
                             viewModel.setSelectedTab(tab)
                         },
                         icon = { Icon(tab.icon, contentDescription = tab.label) },
-                        label = { Text(tab.label) }
+                        label = { Text(tab.label) },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = MaterialTheme.colorScheme.primary,
+                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     )
                 }
             }
@@ -1464,7 +1506,8 @@ private fun JellyMixApp(
                         onReload = viewModel::loadLibrary,
                         onClearSession = viewModel::clearSession,
                         onThemeModeSelected = viewModel::setThemeMode,
-                        onAccentThemeSelected = viewModel::setAccentTheme
+                        onAccentThemeSelected = viewModel::setAccentTheme,
+                        onVisualizerDebugOverlayChanged = viewModel::setVisualizerDebugOverlay
                     )
                     }
                 }
@@ -1475,10 +1518,13 @@ private fun JellyMixApp(
                             mixes = mixes,
                             onPlayPause = viewModel::togglePlayPause,
                             onLike = viewModel::toggleLike,
+                            onPrevious = viewModel::previous,
                             onSkip = viewModel::skip,
+                            onSeek = viewModel::seekToProgress,
                             onShuffle = viewModel::toggleShuffle,
                             onRepeat = viewModel::toggleRepeat,
                             onStartRadio = viewModel::startRadioFromCurrent,
+                            onVisualizerStageChanged = viewModel::setNowPlayingVisualizerStage,
                             onDjModeSelected = viewModel::applyGuestDjMode,
                             onQueueSelected = viewModel::startQueue,
                             onShuffledQueueSelected = viewModel::startShuffledQueue,
@@ -1493,13 +1539,16 @@ private fun JellyMixApp(
                             HomeNowCard(
                                 state = state,
                                 onOpenNowPlaying = { showNowPlaying = true },
+                                onPrevious = viewModel::previous,
                                 onPlayPause = viewModel::togglePlayPause,
+                                onLike = viewModel::toggleLike,
+                                onNext = viewModel::skip,
                                 onStartRadio = viewModel::startRadioFromCurrent
                             )
                         }
                         item { SpeedDialGrid(homeSpeedDialMixes(mixes), viewModel::startQueue) }
-                        if (recentTracks.isNotEmpty()) {
-                            item { TrackRail("Recently played", recentTracks.take(10), viewModel::selectTrack) }
+                        if (recentTrackPlays.isNotEmpty()) {
+                            item { RecentTrackRail("Recently played", recentTrackPlays.take(10), viewModel::selectTrack) }
                         }
                         item { TrackRail("Heavy rotation", visibleTracks.take(10), viewModel::selectTrack) }
                     }
@@ -1559,16 +1608,17 @@ private fun JellyMixApp(
                                 onModeSelected = viewModel::applyGuestDjMode
                             )
                         }
-                        item { JarvisResultsSection(state, viewModel::selectTrack) }
+                        item { JarvisResultsSection(state, viewModel::sendDjPrompt, viewModel::selectTrack) }
                     }
                     Tab.Library -> {
+                        val libraryTracks = filterTracks(state.tracks, state.searchQuery)
                         item { SearchCard(state.searchQuery, viewModel::setSearchQuery, visibleTracks.size) }
-                        item { LibrarySummary(state.tracks, state.rawTrackCount) }
-                        item { LibraryActions(state.tracks, viewModel::startQueue, viewModel::startShuffledQueue) }
                         item { LibraryBrowseSegmentControl(state.libraryBrowseMode, viewModel::setLibraryBrowseMode) }
+                        item { LibrarySummary(libraryTracks, state.rawTrackCount) }
+                        item { LibraryActions(libraryTracks, state.libraryBrowseMode, viewModel::startQueue, viewModel::startShuffledQueue) }
                         libraryBrowseContent(
                             mode = state.libraryBrowseMode,
-                            tracks = filterTracks(state.tracks, state.searchQuery),
+                            tracks = libraryTracks,
                             liked = state.liked,
                             onTrackSelected = viewModel::selectTrack,
                             onQueueSelected = viewModel::startQueue
@@ -1617,11 +1667,12 @@ private fun HomeMoodChips(selected: String, onSelected: (String) -> Unit) {
     val chips = listOf("Energize", "Feel good", "Workout", "Focus", "Late night", "Chill")
     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         items(chips) { chip ->
-            FilterChip(
-                selected = selected.equals(chip, ignoreCase = true),
-                onClick = { onSelected(chip) },
-                label = { Text(chip) }
-            )
+                FilterChip(
+                    selected = selected.equals(chip, ignoreCase = true),
+                    onClick = { onSelected(chip) },
+                    label = { Text(chip) },
+                    colors = selectedChipColors()
+                )
         }
     }
 }
@@ -1634,6 +1685,78 @@ private fun lowEmphasisButtonColors() = ButtonDefaults.buttonColors(
     containerColor = MaterialTheme.colorScheme.surfaceVariant,
     contentColor = MaterialTheme.colorScheme.onSurface
 )
+
+@Composable
+private fun selectedChipColors() = FilterChipDefaults.filterChipColors(
+    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+    selectedLabelColor = MaterialTheme.colorScheme.primary,
+    selectedLeadingIconColor = MaterialTheme.colorScheme.primary
+)
+
+@Composable
+private fun PrimaryPlayButton(
+    onClick: () -> Unit,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    label: String = "Play"
+) {
+    Button(onClick = onClick, enabled = enabled, modifier = modifier) {
+        Text(label)
+    }
+}
+
+@Composable
+private fun InfoNote(text: String, modifier: Modifier = Modifier) {
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Icon(Icons.Filled.Info, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+        Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
+    }
+}
+
+@Composable
+private fun HeartIcon(liked: Boolean, modifier: Modifier = Modifier) {
+    Icon(
+        if (liked) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+        contentDescription = if (liked) "Liked" else "Not liked",
+        tint = if (liked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+        modifier = modifier
+    )
+}
+
+@Composable
+private fun TrackSubtitleLine(track: Track, modifier: Modifier = Modifier) {
+    val artist = track.artist.cleanUnknown("Unknown Artist").ifBlank { track.filename.orEmpty() }
+    val album = track.album.cleanUnknown("Unknown Album").trimTrailingOpenParen()
+    val genre = track.genre.takeIf { album.isBlank() && it.isNotBlank() && it.lowercase() !in internalGenreLabels }.orEmpty()
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        if (artist.isNotBlank()) {
+            Text(
+                artist,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Clip
+            )
+        }
+        if (album.isNotBlank()) {
+            Text(" • ", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+            Text(
+                album,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false)
+            )
+        }
+        if (genre.isNotBlank()) {
+            Text(" • $genre", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Clip)
+        }
+    }
+}
+
+private fun String.trimTrailingOpenParen(): String =
+    trim().replace(Regex("\\s*\\([^)]*$"), "").trim()
 
 @Composable
 private fun SectionHeader(text: String) {
@@ -1655,28 +1778,46 @@ private fun initials(value: String): String =
         .joinToString("")
         .ifBlank { "JM" }
 
+private fun collisionAwareInitials(name: String, allNames: List<String>): String {
+    if (name.equals("Liked Radio", ignoreCase = true)) return "LIKE"
+    if (name.equals("Library Radio", ignoreCase = true)) return "LIB"
+    val base = initials(name)
+    val collisions = allNames.filter { initials(it) == base }
+    if (collisions.size <= 1) return base
+    val normalized = name.filter { it.isLetterOrDigit() }.uppercase()
+    val distinct = normalized.take(4).ifBlank { base }
+    val length = if (distinct.length >= 4) 4 else 3
+    return distinct.take(length).ifBlank { base }
+}
+
 @Composable
 private fun MixesSegmentControl(selected: MixesSegment, onSelected: (MixesSegment) -> Unit) {
     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         items(MixesSegment.entries) { segment ->
-            FilterChip(
-                selected = selected == segment,
-                onClick = { onSelected(segment) },
-                label = { Text(segment.label) }
-            )
+                FilterChip(
+                    selected = selected == segment,
+                    onClick = { onSelected(segment) },
+                    label = { Text(segment.label) },
+                    colors = selectedChipColors()
+                )
         }
     }
 }
 
 @Composable
 private fun LibraryBrowseSegmentControl(selected: LibraryBrowseMode, onSelected: (LibraryBrowseMode) -> Unit) {
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(end = 18.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
         items(LibraryBrowseMode.entries) { mode ->
-            FilterChip(
-                selected = selected == mode,
-                onClick = { onSelected(mode) },
-                label = { Text(mode.label) }
-            )
+                FilterChip(
+                    selected = selected == mode,
+                    onClick = { onSelected(mode) },
+                    label = { Text(mode.label) },
+                    colors = selectedChipColors()
+                )
         }
     }
 }
@@ -1690,7 +1831,8 @@ private fun SavedDiscoveryFilters(onSelected: (DiscoveryFilter) -> Unit) {
                 FilterChip(
                     selected = false,
                     onClick = { onSelected(filter) },
-                    label = { Text(filter.label) }
+                    label = { Text(filter.label) },
+                    colors = selectedChipColors()
                 )
             }
         }
@@ -1707,6 +1849,7 @@ private fun SpeedDialGrid(
     onQueueSelected: (String, List<Track>) -> Unit
 ) {
     val rows = mixes.take(6).chunked(3)
+    val names = mixes.take(6).map { it.name }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         SectionHeader("Speed dial")
         rows.forEach { rowMixes ->
@@ -1714,6 +1857,7 @@ private fun SpeedDialGrid(
                 rowMixes.forEach { mix ->
                     SpeedDialTile(
                         mix = mix,
+                        allNames = names,
                         onClick = { onQueueSelected(mix.name, mix.tracks) },
                         modifier = Modifier.weight(1f)
                     )
@@ -1729,6 +1873,7 @@ private fun SpeedDialGrid(
 @Composable
 private fun SpeedDialTile(
     mix: Mix,
+    allNames: List<String>,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1746,25 +1891,26 @@ private fun SpeedDialTile(
                     .matchParentSize()
                     .background(Brush.linearGradient(mixGradient(mix.name)))
             )
-            mix.tracks.firstOrNull { !it.imageUrl.isNullOrBlank() }?.imageUrl?.let { imageUrl ->
+            val imageUrl = mix.tracks.firstOrNull { !it.imageUrl.isNullOrBlank() }?.imageUrl
+            if (!imageUrl.isNullOrBlank()) {
                 AsyncImage(
                     model = imageUrl,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
-                    alpha = 0.22f,
                     modifier = Modifier.matchParentSize()
                 )
+            } else {
+                Text(
+                    collisionAwareInitials(mix.name, allNames),
+                    style = MaterialTheme.typography.displaySmall,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White.copy(alpha = 0.86f),
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .background(Color.Black.copy(alpha = 0.20f), CircleShape)
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                )
             }
-            Text(
-                initials(mix.name),
-                style = MaterialTheme.typography.displaySmall,
-                fontWeight = FontWeight.Bold,
-                color = Color.White.copy(alpha = 0.86f),
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .background(Color.Black.copy(alpha = 0.20f), CircleShape)
-                    .padding(horizontal = 14.dp, vertical = 8.dp)
-            )
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -1815,7 +1961,8 @@ private fun ConnectionCard(
     onReload: () -> Unit,
     onClearSession: () -> Unit,
     onThemeModeSelected: (ThemeMode) -> Unit,
-    onAccentThemeSelected: (AccentTheme) -> Unit
+    onAccentThemeSelected: (AccentTheme) -> Unit,
+    onVisualizerDebugOverlayChanged: (Boolean) -> Unit
 ) {
     var expanded by remember(state.hasSession) { mutableStateOf(!state.hasSession) }
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
@@ -1867,7 +2014,9 @@ private fun ConnectionCard(
                     themeMode = state.themeMode,
                     accentTheme = state.accentTheme,
                     onThemeModeSelected = onThemeModeSelected,
-                    onAccentThemeSelected = onAccentThemeSelected
+                    onAccentThemeSelected = onAccentThemeSelected,
+                    visualizerDebugOverlay = state.visualizerDebugOverlay,
+                    onVisualizerDebugOverlayChanged = onVisualizerDebugOverlayChanged
                 )
             }
             Text(state.status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -1880,7 +2029,9 @@ private fun ThemeOptions(
     themeMode: ThemeMode,
     accentTheme: AccentTheme,
     onThemeModeSelected: (ThemeMode) -> Unit,
-    onAccentThemeSelected: (AccentTheme) -> Unit
+    onAccentThemeSelected: (AccentTheme) -> Unit,
+    visualizerDebugOverlay: Boolean,
+    onVisualizerDebugOverlayChanged: (Boolean) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Theme", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
@@ -1889,7 +2040,8 @@ private fun ThemeOptions(
                 FilterChip(
                     selected = themeMode == mode,
                     onClick = { onThemeModeSelected(mode) },
-                    label = { Text(mode.label) }
+                    label = { Text(mode.label) },
+                    colors = selectedChipColors()
                 )
             }
         }
@@ -1899,6 +2051,7 @@ private fun ThemeOptions(
                 FilterChip(
                     selected = accentTheme == accent,
                     onClick = { onAccentThemeSelected(accent) },
+                    colors = selectedChipColors(),
                     label = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(
@@ -1914,6 +2067,13 @@ private fun ThemeOptions(
                 )
             }
         }
+        Text("Visualizer", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+        FilterChip(
+            selected = visualizerDebugOverlay,
+            onClick = { onVisualizerDebugOverlayChanged(!visualizerDebugOverlay) },
+            label = { Text(if (visualizerDebugOverlay) "Diagnostics on" else "Diagnostics off") },
+            colors = selectedChipColors()
+        )
     }
 }
 
@@ -1977,7 +2137,10 @@ private fun VisualizerCard(
 private fun HomeNowCard(
     state: JellyMixState,
     onOpenNowPlaying: () -> Unit,
+    onPrevious: () -> Unit,
     onPlayPause: () -> Unit,
+    onLike: () -> Unit,
+    onNext: () -> Unit,
     onStartRadio: () -> Unit
 ) {
     Card(
@@ -1992,11 +2155,20 @@ private fun HomeNowCard(
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(if (state.isPlaying) "Now playing" else "Ready to play", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                 Text(state.currentTrack.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(state.currentTrack.subtitle().text, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                TrackSubtitleLine(state.currentTrack)
                 Text(state.queueLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    IconButton(onClick = onPrevious) {
+                        Icon(Icons.Filled.SkipPrevious, contentDescription = "Previous")
+                    }
                     IconButton(onClick = onPlayPause) {
                         Icon(if (state.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, contentDescription = "Play")
+                    }
+                    IconButton(onClick = onLike) {
+                        HeartIcon(state.liked[state.currentTrack.id] == true)
+                    }
+                    IconButton(onClick = onNext) {
+                        Icon(Icons.Filled.SkipNext, contentDescription = "Next")
                     }
                     IconButton(onClick = onStartRadio) {
                         Icon(Icons.Filled.Recommend, contentDescription = "Song radio")
@@ -2019,19 +2191,33 @@ private fun MusicVisualizer(
     compact: Boolean = false,
     useFeedbackTunnel: Boolean = false,
     fullscreen: Boolean = false,
-    palette: List<Color>? = null
+    palette: List<Color>? = null,
+    mode: VisualizerRenderMode = VisualizerRenderMode.FeedbackTunnel,
+    debugOverlay: Boolean = false
 ) {
-    if (useFeedbackTunnel) {
+    if (useFeedbackTunnel && mode != VisualizerRenderMode.Ridgeline) {
         val effectivePalette = palette ?: listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.secondary, MaterialTheme.colorScheme.tertiary)
-        FeedbackTunnelVisualizer(
-            frame = frame,
-            palette = effectivePalette,
-            isPlaying = isPlaying,
-            modifier = modifier,
-            intensity = if (compact) 0.75f else 1.05f,
-            sensitivity = 1.1f,
-            fullscreen = fullscreen
-        )
+        var stats by remember { mutableStateOf(VisualizerDebugStats(mode = mode, bands = frame.bands, live = frame.live)) }
+        Box(modifier = modifier) {
+            FeedbackTunnelVisualizer(
+                frame = frame,
+                palette = effectivePalette,
+                isPlaying = isPlaying,
+                modifier = Modifier.fillMaxSize(),
+                intensity = when (mode) {
+                    VisualizerRenderMode.Fluid -> if (compact) 0.58f else 0.86f
+                    else -> if (compact) 0.7f else 0.98f
+                },
+                sensitivity = if (mode == VisualizerRenderMode.Fluid) 0.9f else 1.0f,
+                fullscreen = fullscreen,
+                mode = mode,
+                debugOverlay = debugOverlay,
+                onStats = { stats = it }
+            )
+            if (debugOverlay) {
+                VisualizerDebugOverlay(frame = frame, mode = mode, stats = stats)
+            }
+        }
         return
     }
     val transition = rememberInfiniteTransition(label = "visualizer")
@@ -2142,14 +2328,43 @@ private fun MusicVisualizer(
 }
 
 @Composable
+private fun VisualizerDebugOverlay(frame: AudioAnalysisFrame, mode: VisualizerRenderMode, stats: VisualizerDebugStats) {
+    val bands = stats.bands.ifEmpty { frame.bands }.take(12).joinToString(" ") { (it * 100).roundToInt().toString() }
+    val fps = if (stats.fps > 0f) stats.fps.roundToInt().toString() else "..."
+    val mean = (stats.meanLuminance * 100).roundToInt()
+    Box(
+        modifier = Modifier
+            .padding(10.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xCC000000))
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+    ) {
+        Text(
+            text = "mode ${mode.label()} | fps $fps | ${if (frame.live) "live" else "fallback"} | mean $mean | resets ${stats.resetCount} | bands $bands",
+            style = MaterialTheme.typography.labelSmall,
+            color = Color.White.copy(alpha = 0.86f),
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+private fun VisualizerRenderMode.label(): String = when (this) {
+    VisualizerRenderMode.FeedbackTunnel -> "Feedback tunnel"
+    VisualizerRenderMode.Fluid -> "Fluid"
+    VisualizerRenderMode.Ridgeline -> "Ridgeline"
+}
+
+@Composable
 private fun DiscoveryFilters(selected: DiscoveryFilter, onSelected: (DiscoveryFilter) -> Unit) {
     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         items(DiscoveryFilter.entries) { filter ->
-            FilterChip(
-                selected = selected == filter,
-                onClick = { onSelected(filter) },
-                label = { Text(filter.label) }
-            )
+                FilterChip(
+                    selected = selected == filter,
+                    onClick = { onSelected(filter) },
+                    label = { Text(filter.label) },
+                    colors = selectedChipColors()
+                )
         }
     }
 }
@@ -2162,18 +2377,13 @@ private fun JarvisDjCard(
     onSuggestion: (String) -> Unit,
     onModeSelected: (GuestDjMode) -> Unit
 ) {
-    val suggestions = listOf(
-        "Keep this vibe going",
-        "Give me deep cuts",
-        "Make it more high energy",
-        "Chill it out",
-        "Surprise me with fresh stuff"
-    )
+    val context = LocalContext.current
+    val suggestions = listOf("Keep this vibe", "More energy", "Chill it out", "Surprise me")
     val discoverModes = listOf(GuestDjMode.Familiar, GuestDjMode.Discovery, GuestDjMode.DeepCuts)
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Filled.Recommend, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Icon(Icons.Filled.GraphicEq, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
                     Text("Jarvis DJ", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
@@ -2185,7 +2395,8 @@ private fun JarvisDjCard(
                     FilterChip(
                         selected = state.djMode == mode,
                         onClick = { onModeSelected(mode) },
-                        label = { Text(mode.label) }
+                        label = { Text(mode.label) },
+                        colors = selectedChipColors()
                     )
                 }
             }
@@ -2206,19 +2417,33 @@ private fun JarvisDjCard(
                 modifier = Modifier.fillMaxWidth()
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                Button(onClick = onSendPrompt, enabled = state.djDraft.isNotBlank(), modifier = Modifier.weight(1f)) {
+                OutlinedButton(
+                    onClick = {
+                        if (state.djDraft.isBlank()) {
+                            Toast.makeText(context, "Type a Jarvis request first.", Toast.LENGTH_SHORT).show()
+                        } else {
+                            onSendPrompt()
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
                     Text("Tune queue")
                 }
                 Button(onClick = { onSuggestion("Keep this vibe going") }, modifier = Modifier.weight(1f)) {
                     Text("Auto DJ")
                 }
             }
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(end = 18.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 items(suggestions) { suggestion ->
                     FilterChip(
                         selected = false,
-                        onClick = { onSuggestion(suggestion) },
-                        label = { Text(suggestion) }
+                        onClick = { onSuggestion(suggestion.toJarvisPrompt()) },
+                        label = { Text(suggestion) },
+                        colors = selectedChipColors()
                     )
                 }
             }
@@ -2227,7 +2452,9 @@ private fun JarvisDjCard(
 }
 
 @Composable
-private fun JarvisResultsSection(state: JellyMixState, onTrackSelected: (Track) -> Unit) {
+private fun JarvisResultsSection(state: JellyMixState, onRetry: () -> Unit, onTrackSelected: (Track) -> Unit) {
+    val actualMessages = state.djMessages.filterNot { it.text == DefaultJarvisPrompt }
+    if (actualMessages.isEmpty() && !state.queueTitle.startsWith("Jarvis DJ")) return
     val results = state.queue
         .drop(state.queueIndex)
         .ifEmpty {
@@ -2242,22 +2469,47 @@ private fun JarvisResultsSection(state: JellyMixState, onTrackSelected: (Track) 
                 recentlyPlayedIds = state.recentTrackIds
             )
         }
+    val latestJarvis = actualMessages.lastOrNull { it.speaker == "Jarvis" }?.text
+    val hasError = state.status.contains("failed", ignoreCase = true) || state.status.contains("error", ignoreCase = true)
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Jarvis results", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            state.djMessages.takeLast(1).firstOrNull()?.let { message ->
-                Text(message.text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            results.take(12).forEach { track ->
-                QueueReasonRow(track, state.liked[track.id] == true, queueReason(track, state.currentTrack, state.djMode)) {
-                    onTrackSelected(track)
+            when {
+                hasError -> {
+                    Text(state.status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    OutlinedButton(onClick = onRetry, enabled = state.djDraft.isNotBlank()) { Text("Retry") }
                 }
-            }
-            if (results.isEmpty()) {
-                EmptyState("No DJ results yet", "Ask Jarvis for a vibe, artist lane, or discovery direction.")
+                results.isEmpty() -> {
+                    repeat(3) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(56.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                        )
+                    }
+                }
+                else -> {
+                    latestJarvis?.let { message ->
+                        Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    results.take(12).forEach { track ->
+                        QueueReasonRow(track, state.liked[track.id] == true, queueReason(track, state.currentTrack, state.djMode)) {
+                            onTrackSelected(track)
+                        }
+                    }
+                }
             }
         }
     }
+}
+
+private fun String.toJarvisPrompt(): String = when (this) {
+    "Keep this vibe" -> "Keep this vibe going"
+    "More energy" -> "Make it more high energy"
+    "Chill it out" -> "Chill it out"
+    else -> "Surprise me with fresh stuff"
 }
 
 @Composable
@@ -2293,11 +2545,12 @@ private fun VibeChipRow(query: String, onQueryChange: (String) -> Unit) {
     val chips = listOf("Chill", "Hype", "Sad", "Angry", "Focus", "Late night", "Happy", "Nostalgic", "Workout", "Rainy")
     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         items(chips) { chip ->
-            FilterChip(
-                selected = query.equals(chip, ignoreCase = true),
-                onClick = { onQueryChange(chip) },
-                label = { Text(chip) }
-            )
+                    FilterChip(
+                        selected = query.equals(chip, ignoreCase = true),
+                        onClick = { onQueryChange(chip) },
+                        label = { Text(chip) },
+                        colors = selectedChipColors()
+                    )
         }
     }
 }
@@ -2315,11 +2568,9 @@ private fun VibeMixCard(
             MixArtwork(mix)
             Text(mix.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             Text(mix.reason, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            mix.note?.let { Text(it, color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.labelMedium) }
+            mix.note?.let { InfoNote(it) }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                Button(onClick = { onQueueSelected(mix.name, mix.tracks) }, enabled = mix.tracks.isNotEmpty(), colors = lowEmphasisButtonColors(), modifier = Modifier.weight(1f)) {
-                    Text("Play")
-                }
+                PrimaryPlayButton(onClick = { onQueueSelected(mix.name, mix.tracks) }, enabled = mix.tracks.isNotEmpty(), modifier = Modifier.weight(1f))
                 OutlinedButton(onClick = { onShuffledQueueSelected(mix.name, mix.tracks) }, enabled = mix.tracks.isNotEmpty(), modifier = Modifier.weight(1f)) {
                     Text("Shuffle")
                 }
@@ -2340,7 +2591,8 @@ private fun GuestDjModeCard(selected: GuestDjMode, onModeSelected: (GuestDjMode)
                     FilterChip(
                         selected = selected == mode,
                         onClick = { onModeSelected(mode) },
-                        label = { Text(mode.label) }
+                        label = { Text(mode.label) },
+                        colors = selectedChipColors()
                     )
                 }
             }
@@ -2351,6 +2603,7 @@ private fun GuestDjModeCard(selected: GuestDjMode, onModeSelected: (GuestDjMode)
 @Composable
 private fun MixArtwork(mix: Mix) {
     val tracks = mix.tracks.take(4)
+    val imageUrl = tracks.firstOrNull { !it.imageUrl.isNullOrBlank() }?.imageUrl
     Box(
         modifier = Modifier
             .size(126.dp)
@@ -2358,29 +2611,29 @@ private fun MixArtwork(mix: Mix) {
             .clip(RoundedCornerShape(8.dp))
             .background(Brush.linearGradient(mixGradient(mix.name)))
     ) {
-        tracks.firstOrNull { !it.imageUrl.isNullOrBlank() }?.imageUrl?.let { imageUrl ->
+        if (!imageUrl.isNullOrBlank()) {
             AsyncImage(
                 model = imageUrl,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
-                alpha = 0.18f,
                 modifier = Modifier.matchParentSize()
             )
-        }
-        Box(
-            modifier = Modifier
-                .align(Alignment.Center)
-                .size(58.dp)
-                .clip(CircleShape)
-                .background(Color.Black.copy(alpha = 0.24f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                initials(mix.name),
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = Color.White.copy(alpha = 0.9f)
-            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(58.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.24f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    collisionAwareInitials(mix.name, listOf(mix.name)),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White.copy(alpha = 0.9f)
+                )
+            }
         }
     }
 }
@@ -2407,13 +2660,11 @@ private fun MixRail(
                         MixArtwork(mix)
                         Text(mix.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         Text(mix.reason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        mix.note?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary) }
+                        mix.note?.let { InfoNote(it) }
                         Text("${mix.tracks.size} tracks", style = MaterialTheme.typography.labelMedium)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                            Button(onClick = { onQueueSelected(mix.name, mix.tracks) }, enabled = mix.tracks.isNotEmpty(), colors = lowEmphasisButtonColors(), modifier = Modifier.weight(1f)) {
-                                Text("Play")
-                            }
-                            IconButton(onClick = { onShuffledQueueSelected(mix.name, mix.tracks) }, enabled = mix.tracks.isNotEmpty()) {
+                            PrimaryPlayButton(onClick = { onQueueSelected(mix.name, mix.tracks) }, enabled = mix.tracks.isNotEmpty(), modifier = Modifier.weight(1f))
+                            OutlinedButton(onClick = { onShuffledQueueSelected(mix.name, mix.tracks) }, enabled = mix.tracks.isNotEmpty()) {
                                 Icon(Icons.Filled.Shuffle, contentDescription = "Shuffle ${mix.name}")
                             }
                         }
@@ -2449,7 +2700,34 @@ private fun TrackRail(title: String, tracks: List<Track>, onTrackSelected: (Trac
                     Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         AlbumArt(track, size = 128)
                         Text(track.title, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        Text(track.subtitle().text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        TrackSubtitleLine(track)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecentTrackRail(title: String, plays: List<RecentTrackPlay>, onTrackSelected: (Track) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        SectionHeader(title)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            items(plays) { play ->
+                Card(
+                    modifier = Modifier
+                        .width(154.dp)
+                        .height(232.dp)
+                        .clickable { onTrackSelected(play.track) },
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        AlbumArt(play.track, size = 128)
+                        Text(play.track.title, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        TrackSubtitleLine(play.track)
+                        if (play.count > 1) {
+                            Text("${play.count} plays", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        }
                     }
                 }
             }
@@ -2552,9 +2830,7 @@ private fun LibraryGroupCard(
                     Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Button(onClick = onQueueSelected, enabled = tracks.isNotEmpty(), colors = lowEmphasisButtonColors()) {
-                    Text("Play")
-                }
+                PrimaryPlayButton(onClick = onQueueSelected, enabled = tracks.isNotEmpty())
             }
             tracks.take(4).forEach { track ->
                 QueueReasonRow(track, liked[track.id] == true) { onTrackSelected(track) }
@@ -2587,14 +2863,10 @@ private fun TrackRow(track: Track, liked: Boolean, onClick: () -> Unit) {
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(track.title, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(track.subtitle().text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                TrackSubtitleLine(track)
             }
             Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                Icon(
-                    if (liked) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                    contentDescription = if (liked) "Liked" else "Not liked",
-                    tint = if (liked) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outline
-                )
+                HeartIcon(liked)
             }
         }
     }
@@ -2615,11 +2887,9 @@ private fun PlaylistCard(
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(mix.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             Text(mix.reason, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            mix.note?.let { Text(it, color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.labelMedium) }
+            mix.note?.let { InfoNote(it) }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                Button(onClick = { onQueueSelected(mix.name, mix.tracks) }, enabled = mix.tracks.isNotEmpty(), colors = lowEmphasisButtonColors(), modifier = Modifier.weight(1f)) {
-                    Text("Play")
-                }
+                PrimaryPlayButton(onClick = { onQueueSelected(mix.name, mix.tracks) }, enabled = mix.tracks.isNotEmpty(), modifier = Modifier.weight(1f))
                 OutlinedButton(onClick = { onShuffledQueueSelected(mix.name, mix.tracks) }, enabled = mix.tracks.isNotEmpty(), modifier = Modifier.weight(1f)) {
                     Text("Shuffle")
                 }
@@ -2836,17 +3106,13 @@ private fun QueueReasonRow(track: Track, liked: Boolean, reason: String? = null,
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(track.title, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(track.subtitle().text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                TrackSubtitleLine(track)
                 if (!reason.isNullOrBlank()) {
                     Text(reason, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
             }
             Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                Icon(
-                    if (liked) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                    contentDescription = if (liked) "Liked" else "Not liked",
-                    tint = if (liked) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outline
-                )
+                HeartIcon(liked)
             }
         }
     }
@@ -2882,9 +3148,12 @@ private fun AutoplayPreviewSection(state: JellyMixState, onTrackSelected: (Track
 @Composable
 private fun LibraryActions(
     tracks: List<Track>,
+    mode: LibraryBrowseMode,
     onQueueSelected: (String, List<Track>) -> Unit,
     onShuffledQueueSelected: (String, List<Track>) -> Unit
 ) {
+    val canonical = deduplicateTracks(tracks)
+    val label = mode.label
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Row(
             modifier = Modifier
@@ -2892,10 +3161,10 @@ private fun LibraryActions(
                 .padding(12.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Button(onClick = { onQueueSelected("Library", tracks) }, enabled = tracks.isNotEmpty(), modifier = Modifier.weight(1f)) {
-                Text("Play all")
+            Button(onClick = { onQueueSelected("Library $label", canonical) }, enabled = canonical.isNotEmpty(), modifier = Modifier.weight(1f)) {
+                Text("Play $label")
             }
-            OutlinedButton(onClick = { onShuffledQueueSelected("Library", tracks) }, enabled = tracks.isNotEmpty(), modifier = Modifier.weight(1f)) {
+            OutlinedButton(onClick = { onShuffledQueueSelected("Library $label", canonical) }, enabled = canonical.isNotEmpty(), modifier = Modifier.weight(1f)) {
                 Text("Shuffle all")
             }
         }
@@ -2954,15 +3223,27 @@ private fun SelectedPlaylistSection(
 @Composable
 private fun LibrarySummary(tracks: List<Track>, rawTrackCount: Int) {
     val canonicalTracks = deduplicateTracks(tracks)
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-        StatCard("Artists", canonicalTracks.map { it.artist }.filter { it.isNotBlank() }.distinct().size.toString(), Modifier.weight(1f))
-        StatCard("Albums", canonicalTracks.map { it.album }.filter { it.isNotBlank() }.distinct().size.toString(), Modifier.weight(1f))
-        StatCard(
-            "Tracks",
-            canonicalTracks.size.toString(),
-            Modifier.weight(1f),
-            tooltip = "${canonicalTracks.size} deduped tracks from ${rawTrackCount.coerceAtLeast(canonicalTracks.size)} raw Jellyfin items."
-        )
+    val values = listOf(
+        "Artists" to canonicalTracks.map { it.artist }.filter { it.isNotBlank() }.distinct().size.toString(),
+        "Albums" to canonicalTracks.map { it.album }.filter { it.isNotBlank() }.distinct().size.toString(),
+        "Tracks" to canonicalTracks.size.toString()
+    )
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                values.forEach { (label, value) ->
+                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                    }
+                }
+            }
+            Text(
+                "${canonicalTracks.size} deduped tracks from ${rawTrackCount.coerceAtLeast(canonicalTracks.size)} raw Jellyfin items.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 
@@ -2997,10 +3278,13 @@ private fun NowPlayingPage(
     mixes: List<Mix>,
     onPlayPause: () -> Unit,
     onLike: () -> Unit,
+    onPrevious: () -> Unit,
     onSkip: () -> Unit,
+    onSeek: (Float) -> Unit,
     onShuffle: () -> Unit,
     onRepeat: () -> Unit,
     onStartRadio: () -> Unit,
+    onVisualizerStageChanged: (Boolean) -> Unit,
     onDjModeSelected: (GuestDjMode) -> Unit,
     onQueueSelected: (String, List<Track>) -> Unit,
     onShuffledQueueSelected: (String, List<Track>) -> Unit,
@@ -3009,8 +3293,9 @@ private fun NowPlayingPage(
     onTrackSelected: (Track) -> Unit
 ) {
     val track = state.currentTrack
-    var showVisualizerStage by remember(track.id) { mutableStateOf(false) }
+    var showVisualizerStage by remember(track.id, state.nowPlayingVisualizerStage) { mutableStateOf(state.nowPlayingVisualizerStage) }
     var showFullscreenVisualizer by remember(track.id) { mutableStateOf(false) }
+    var showOverflowMenu by remember { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -3019,8 +3304,12 @@ private fun NowPlayingPage(
                     bands = state.visualizerBands,
                     frame = state.audioFrame,
                     isPlaying = state.isPlaying,
+                    debugOverlay = state.visualizerDebugOverlay,
                     showVisualizer = showVisualizerStage,
-                    onToggle = { showVisualizerStage = !showVisualizerStage },
+                    onToggle = {
+                        showVisualizerStage = !showVisualizerStage
+                        onVisualizerStageChanged(showVisualizerStage)
+                    },
                     onFullscreen = { showFullscreenVisualizer = true }
                 )
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -3028,42 +3317,71 @@ private fun NowPlayingPage(
                     Text(track.artist, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(track.album, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
-                LinearProgressIndicator(progress = { track.completion.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
-                Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                NowPlayingProgress(track = track, onSeek = onSeek)
+                Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                     DrivingControlButton(
+                        icon = Icons.Filled.SkipPrevious,
+                        contentDescription = "Previous",
+                        size = 76,
+                        iconSize = 38,
+                        onClick = onPrevious
+                    )
+                    Spacer(Modifier.width(18.dp))
+                    DrivingControlButton(
+                        icon = if (state.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        contentDescription = if (state.isPlaying) "Pause" else "Play",
+                        prominent = true,
+                        size = 88,
+                        iconSize = 44,
+                        onClick = onPlayPause
+                    )
+                    Spacer(Modifier.width(18.dp))
+                    DrivingControlButton(
+                        icon = Icons.Filled.SkipNext,
+                        contentDescription = "Next",
+                        size = 76,
+                        iconSize = 38,
+                        onClick = onSkip
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    SecondaryPlayerButton(
                         icon = Icons.Filled.Shuffle,
                         contentDescription = "Shuffle",
                         active = state.shuffleEnabled,
                         onClick = onShuffle
                     )
-                    DrivingControlButton(
+                    SecondaryPlayerButton(
                         icon = if (state.liked[track.id] == true) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
                         contentDescription = "Like",
                         active = state.liked[track.id] == true,
                         onClick = onLike
                     )
-                    DrivingControlButton(
-                        icon = if (state.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                        contentDescription = if (state.isPlaying) "Pause" else "Play",
-                        prominent = true,
-                        size = 76,
-                        iconSize = 38,
-                        onClick = onPlayPause
-                    )
-                    DrivingControlButton(
-                        icon = Icons.Filled.SkipNext,
-                        contentDescription = "Skip",
-                        onClick = onSkip
-                    )
-                    DrivingControlButton(
+                    SecondaryPlayerButton(
                         icon = Icons.Filled.Repeat,
                         contentDescription = "Repeat",
                         active = state.repeatEnabled,
                         onClick = onRepeat
                     )
-                }
-                Button(onClick = onStartRadio, modifier = Modifier.fillMaxWidth()) {
-                    Text("Start song radio")
+                    SecondaryPlayerButton(
+                        icon = Icons.AutoMirrored.Filled.QueueMusic,
+                        contentDescription = "Queue",
+                        onClick = onOpenQueue
+                    )
+                    Box {
+                        SecondaryPlayerButton(
+                            icon = Icons.Filled.MoreVert,
+                            contentDescription = "More actions",
+                            onClick = { showOverflowMenu = true }
+                        )
+                        DropdownMenu(expanded = showOverflowMenu, onDismissRequest = { showOverflowMenu = false }) {
+                            DropdownMenuItem(text = { Text("Start song radio") }, onClick = { showOverflowMenu = false; onStartRadio() })
+                            DropdownMenuItem(text = { Text("Go to album") }, onClick = { showOverflowMenu = false })
+                            DropdownMenuItem(text = { Text("Go to artist") }, onClick = { showOverflowMenu = false })
+                            DropdownMenuItem(text = { Text("Add to playlist") }, onClick = { showOverflowMenu = false })
+                            DropdownMenuItem(text = { Text("Track info") }, onClick = { showOverflowMenu = false })
+                        }
+                    }
                 }
             }
         }
@@ -3079,6 +3397,11 @@ private fun NowPlayingPage(
             track = track,
             frame = state.audioFrame,
             isPlaying = state.isPlaying,
+            debugOverlay = state.visualizerDebugOverlay,
+            onPrevious = onPrevious,
+            onPlayPause = onPlayPause,
+            onNext = onSkip,
+            onSeek = onSeek,
             onDismiss = { showFullscreenVisualizer = false }
         )
     }
@@ -3090,6 +3413,7 @@ private fun NowPlayingStage(
     bands: List<Float>,
     frame: AudioAnalysisFrame,
     isPlaying: Boolean,
+    debugOverlay: Boolean,
     showVisualizer: Boolean,
     onToggle: () -> Unit,
     onFullscreen: () -> Unit
@@ -3117,6 +3441,7 @@ private fun NowPlayingStage(
                     frame = frame,
                     useFeedbackTunnel = true,
                     fullscreen = false,
+                    debugOverlay = debugOverlay,
                     palette = coverColors(track.genre) + listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.secondary, MaterialTheme.colorScheme.tertiary),
                     modifier = Modifier.fillMaxSize()
                 )
@@ -3142,8 +3467,36 @@ private fun FullscreenVisualizerDialog(
     track: Track,
     frame: AudioAnalysisFrame,
     isPlaying: Boolean,
+    debugOverlay: Boolean,
+    onPrevious: () -> Unit,
+    onPlayPause: () -> Unit,
+    onNext: () -> Unit,
+    onSeek: (Float) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val view = LocalView.current
+    val context = LocalContext.current
+    var overlayVisible by remember(track.id) { mutableStateOf(true) }
+    var mode by remember(track.id) { mutableStateOf(VisualizerRenderMode.FeedbackTunnel) }
+    var dragX by remember(track.id) { mutableStateOf(0f) }
+    DisposableEffect(Unit) {
+        val previousKeepScreenOn = view.keepScreenOn
+        view.keepScreenOn = true
+        onDispose { view.keepScreenOn = previousKeepScreenOn }
+    }
+    LaunchedEffect(overlayVisible, track.id, mode) {
+        if (overlayVisible) {
+            delay(4_000)
+            overlayVisible = false
+        }
+    }
+    fun cycleMode(direction: Int) {
+        val modes = VisualizerRenderMode.entries
+        val nextIndex = (modes.indexOf(mode) + direction + modes.size) % modes.size
+        mode = modes[nextIndex]
+        overlayVisible = true
+        Toast.makeText(context, mode.label(), Toast.LENGTH_SHORT).show()
+    }
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -3152,23 +3505,73 @@ private fun FullscreenVisualizerDialog(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black)
+                .pointerInput(track.id) {
+                    detectDragGestures(
+                        onDragStart = { dragX = 0f },
+                        onDragEnd = {
+                            when {
+                                dragX < -72f -> cycleMode(1)
+                                dragX > 72f -> cycleMode(-1)
+                            }
+                            dragX = 0f
+                        },
+                        onDragCancel = { dragX = 0f }
+                    ) { change, dragAmount ->
+                        dragX += dragAmount.x
+                        change.consume()
+                    }
+                }
+                .pointerInput(track.id, overlayVisible) {
+                    detectTapGestures { overlayVisible = !overlayVisible }
+                }
         ) {
-            FeedbackTunnelVisualizer(
+            MusicVisualizer(
+                bands = frame.bands,
                 frame = frame,
-                palette = coverColors(track.genre) + listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.secondary, MaterialTheme.colorScheme.tertiary),
                 isPlaying = isPlaying,
-                intensity = 1.25f,
-                sensitivity = 1.2f,
+                useFeedbackTunnel = true,
+                palette = coverColors(track.genre) + listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.secondary, MaterialTheme.colorScheme.tertiary),
+                mode = mode,
+                debugOverlay = debugOverlay,
                 fullscreen = true,
                 modifier = Modifier.fillMaxSize()
             )
-            Column(
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(22.dp)
-            ) {
-                Text(track.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(track.artist, style = MaterialTheme.typography.titleMedium, color = Color.White.copy(alpha = 0.72f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (overlayVisible) {
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .fillMaxWidth()
+                        .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xDD000000))))
+                        .padding(start = 22.dp, end = 22.dp, bottom = 18.dp, top = 80.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(track.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(track.artist, style = MaterialTheme.typography.titleMedium, color = Color.White.copy(alpha = 0.78f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(track.album, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.68f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Row(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = onPrevious, modifier = Modifier.size(60.dp)) {
+                            Icon(Icons.Filled.SkipPrevious, contentDescription = "Previous", tint = Color.White, modifier = Modifier.size(34.dp))
+                        }
+                        IconButton(
+                            onClick = onPlayPause,
+                            modifier = Modifier
+                                .size(72.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary)
+                        ) {
+                            Icon(if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, contentDescription = if (isPlaying) "Pause" else "Play", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(42.dp))
+                        }
+                        IconButton(onClick = onNext, modifier = Modifier.size(60.dp)) {
+                            Icon(Icons.Filled.SkipNext, contentDescription = "Next", tint = Color.White, modifier = Modifier.size(34.dp))
+                        }
+                        Text(mode.label(), color = Color.White.copy(alpha = 0.72f), style = MaterialTheme.typography.labelMedium)
+                    }
+                    Slider(
+                        value = track.completion.coerceIn(0f, 1f),
+                        onValueChange = onSeek,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
             IconButton(
                 onClick = onDismiss,
@@ -3181,6 +3584,44 @@ private fun FullscreenVisualizerDialog(
                 Icon(Icons.Filled.Close, contentDescription = "Close visualizer", tint = Color.White)
             }
         }
+    }
+}
+
+@Composable
+private fun NowPlayingProgress(track: Track, onSeek: (Float) -> Unit) {
+    val progress = track.completion.coerceIn(0f, 1f)
+    val elapsedSec = (track.durationSec * progress).roundToInt().coerceIn(0, track.durationSec)
+    val remainingSec = (track.durationSec - elapsedSec).coerceAtLeast(0)
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Slider(
+                value = progress,
+                onValueChange = onSeek,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(formatDuration(elapsedSec), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("-${formatDuration(remainingSec)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun SecondaryPlayerButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    active: Boolean = false
+) {
+    val tint = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f)
+    IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
+        Icon(icon, contentDescription = contentDescription, tint = tint, modifier = Modifier.size(26.dp))
     }
 }
 
@@ -3383,7 +3824,7 @@ private fun coverColors(genre: String): List<Color> =
         "synth", "electronic" -> listOf(Color(0xFF00D9B5), Color(0xFF284BFF))
         "ambient", "classical" -> listOf(Color(0xFFB8E1FF), Color(0xFF7A89C2))
         "rock", "metal" -> listOf(Color(0xFF2E3532), Color(0xFFD8A47F))
-        "hip hop", "rap" -> listOf(Color(0xFFFF6B6B), Color(0xFFFFC857))
+        "hip hop", "rap" -> listOf(Color(0xFF1DE9B6), Color(0xFF44546A))
         else -> listOf(Color(0xFFF7F3E8), Color(0xFF00D9B5))
     }
 
@@ -3433,6 +3874,8 @@ data class JellyMixState(
     val userId: String = "",
     val themeMode: ThemeMode = ThemeMode.Dark,
     val accentTheme: AccentTheme = AccentTheme.Jelly,
+    val visualizerDebugOverlay: Boolean = false,
+    val nowPlayingVisualizerStage: Boolean = false,
     val selectedTab: Tab = Tab.Home,
     val mixesSegment: MixesSegment = MixesSegment.Mixes,
     val libraryBrowseMode: LibraryBrowseMode = LibraryBrowseMode.Tracks,
@@ -3441,7 +3884,7 @@ data class JellyMixState(
     val discoveryFilter: DiscoveryFilter = DiscoveryFilter.LongListens,
     val djMode: GuestDjMode = GuestDjMode.Flow,
     val djDraft: String = "",
-    val djMessages: List<DjMessage> = listOf(DjMessage("Jarvis", "Tell me what you want to hear. I can go deeper, keep it familiar, make it louder, chill it out, or build around an artist.")),
+    val djMessages: List<DjMessage> = listOf(DjMessage("Jarvis", DefaultJarvisPrompt)),
     val tracks: List<Track>,
     val currentTrack: Track,
     val queue: List<Track> = emptyList(),
@@ -3493,7 +3936,24 @@ data class JellyMixState(
 
     fun recentTracks(): List<Track> =
         deduplicateTracks(recentTrackIds.mapNotNull { id -> tracks.firstOrNull { it.id == id } })
+
+    fun recentTrackPlays(): List<RecentTrackPlay> {
+        if (recentTrackIds.isEmpty()) return emptyList()
+        val collapsed = mutableListOf<RecentTrackPlay>()
+        recentTrackIds.forEach { id ->
+            val track = tracks.firstOrNull { it.id == id } ?: return@forEach
+            val last = collapsed.lastOrNull()
+            if (last?.track?.id == id) {
+                collapsed[collapsed.lastIndex] = last.copy(count = last.count + 1)
+            } else if (collapsed.none { it.track.id == id }) {
+                collapsed += RecentTrackPlay(track, 1)
+            }
+        }
+        return collapsed
+    }
 }
+
+data class RecentTrackPlay(val track: Track, val count: Int)
 
 data class Track(
     val id: String,

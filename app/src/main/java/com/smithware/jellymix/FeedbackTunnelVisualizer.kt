@@ -3,6 +3,9 @@ package com.smithware.jellymix
 import android.content.Context
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -28,7 +31,10 @@ fun FeedbackTunnelVisualizer(
     modifier: Modifier = Modifier,
     intensity: Float = 1f,
     sensitivity: Float = 1f,
-    fullscreen: Boolean = false
+    fullscreen: Boolean = false,
+    mode: VisualizerRenderMode = VisualizerRenderMode.FeedbackTunnel,
+    debugOverlay: Boolean = false,
+    onStats: (VisualizerDebugStats) -> Unit = {}
 ) {
     val renderer = remember { FeedbackTunnelRenderer() }
     AndroidView(
@@ -40,13 +46,13 @@ fun FeedbackTunnelVisualizer(
             }
         },
         update = { view ->
-            renderer.update(frame, palette, isPlaying, intensity, sensitivity, fullscreen)
+            renderer.update(frame, palette, isPlaying, intensity, sensitivity, fullscreen, mode, debugOverlay, onStats)
             view.renderMode = if (isPlaying) GLSurfaceView.RENDERMODE_CONTINUOUSLY else GLSurfaceView.RENDERMODE_WHEN_DIRTY
             if (isPlaying) view.onResume() else view.requestRender()
         }
     )
-    LaunchedEffect(frame, palette, isPlaying, intensity, sensitivity, fullscreen) {
-        renderer.update(frame, palette, isPlaying, intensity, sensitivity, fullscreen)
+    LaunchedEffect(frame, palette, isPlaying, intensity, sensitivity, fullscreen, mode, debugOverlay) {
+        renderer.update(frame, palette, isPlaying, intensity, sensitivity, fullscreen, mode, debugOverlay, onStats)
     }
     DisposableEffect(Unit) {
         onDispose { renderer.stop() }
@@ -91,6 +97,9 @@ class FeedbackTunnelRenderer : GLSurfaceView.Renderer {
     @Volatile private var intensity = 1f
     @Volatile private var sensitivity = 1f
     @Volatile private var fullscreen = false
+    @Volatile private var renderMode = VisualizerRenderMode.FeedbackTunnel
+    @Volatile private var debugOverlay = false
+    @Volatile private var statsCallback: ((VisualizerDebugStats) -> Unit)? = null
     private var width = 0
     private var height = 0
     private var bufferWidth = 0
@@ -105,6 +114,11 @@ class FeedbackTunnelRenderer : GLSurfaceView.Renderer {
     private var frameNumber = 0
     private var direction = 1f
     private var stopped = false
+    private val safetyMonitor = FeedbackSafetyMonitor()
+    private var lastStatsNs = 0L
+    private var lastStatsFrame = 0
+    private val mainHandler = Handler(Looper.getMainLooper())
+    @Volatile private var latestStats = VisualizerDebugStats()
 
     fun update(
         frame: AudioAnalysisFrame,
@@ -112,14 +126,17 @@ class FeedbackTunnelRenderer : GLSurfaceView.Renderer {
         playing: Boolean,
         visualIntensity: Float,
         visualSensitivity: Float,
-        full: Boolean
+        full: Boolean,
+        mode: VisualizerRenderMode,
+        showDebug: Boolean,
+        onStats: (VisualizerDebugStats) -> Unit
     ) {
         val incomingBands = frame.bands
         bandCount = min(incomingBands.size, MAX_BANDS)
         for (i in 0 until bandCount) {
             bands[i] = incomingBands[i].coerceIn(0.02f, 1f)
         }
-        val effectiveColors = colors.ifEmpty { listOf(Color(0xFF10D6C1), Color(0xFFFF6570), Color(0xFF7F8BAA)) }.take(5)
+        val effectiveColors = colors.ifEmpty { listOf(Color(0xFF1DE9B6), Color(0xFF44546A), Color(0xFF6F7885)) }.take(5)
         for (i in 0 until 5) {
             val color = effectiveColors[i % effectiveColors.size]
             palette[i * 3] = color.red
@@ -136,6 +153,9 @@ class FeedbackTunnelRenderer : GLSurfaceView.Renderer {
         intensity = visualIntensity.coerceIn(0.2f, 2f)
         sensitivity = visualSensitivity.coerceIn(0.2f, 2.5f)
         fullscreen = full
+        renderMode = mode
+        debugOverlay = showDebug
+        statsCallback = onStats
     }
 
     fun stop() {
@@ -150,7 +170,7 @@ class FeedbackTunnelRenderer : GLSurfaceView.Renderer {
         screenProgram = createProgram(SCREEN_VERTEX_SHADER, SCREEN_FRAGMENT_SHADER)
         GLES20.glDisable(GLES20.GL_DEPTH_TEST)
         GLES20.glEnable(GLES20.GL_BLEND)
-        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE)
+        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
     }
 
     override fun onSurfaceChanged(gl: GL10?, surfaceWidth: Int, surfaceHeight: Int) {
@@ -169,7 +189,12 @@ class FeedbackTunnelRenderer : GLSurfaceView.Renderer {
         if (beat) direction *= -1f
         drawFeedback(targetIndex, sourceIndex, now)
         drawEnergy(targetIndex, now)
+        if (safetyMonitor.advance(feedbackDecay(), injectedEnergyEstimate())) {
+            clearAccumulationBuffers()
+            Log.w("JellyMixVisualizer", "Feedback luminance guard reset accumulation buffer.")
+        }
         drawToScreen(targetIndex)
+        publishStatsIfNeeded()
         sourceIndex = targetIndex
         frameNumber++
     }
@@ -188,6 +213,7 @@ class FeedbackTunnelRenderer : GLSurfaceView.Renderer {
         GLES20.glUniform1f(GLES20.glGetUniformLocation(feedbackProgram, "uBeat"), if (beat) 1f else 0f)
         GLES20.glUniform1f(GLES20.glGetUniformLocation(feedbackProgram, "uDirection"), direction)
         GLES20.glUniform1f(GLES20.glGetUniformLocation(feedbackProgram, "uIntensity"), intensity)
+        GLES20.glUniform1f(GLES20.glGetUniformLocation(feedbackProgram, "uDecay"), feedbackDecay())
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
     }
 
@@ -195,6 +221,7 @@ class FeedbackTunnelRenderer : GLSurfaceView.Renderer {
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, framebuffers[targetIndex])
         GLES20.glViewport(0, 0, bufferWidth, bufferHeight)
         GLES20.glUseProgram(pointProgram)
+        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE)
         pointBuffer.clear()
         val count = bandCount.coerceIn(1, MAX_BANDS)
         val ringCount = if (fullscreen) 4 else 3
@@ -224,6 +251,7 @@ class FeedbackTunnelRenderer : GLSurfaceView.Renderer {
         GLES20.glUniform1f(GLES20.glGetUniformLocation(pointProgram, "uCentroid"), centroid)
         GLES20.glUniform3fv(GLES20.glGetUniformLocation(pointProgram, "uPalette"), 5, palette, 0)
         GLES20.glDrawArrays(GLES20.GL_POINTS, 0, pointCount)
+        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
         GLES20.glDisableVertexAttribArray(positionHandle)
     }
 
@@ -231,10 +259,12 @@ class FeedbackTunnelRenderer : GLSurfaceView.Renderer {
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
         GLES20.glViewport(0, 0, width, height)
         GLES20.glUseProgram(screenProgram)
+        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
         bindQuad(screenProgram)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textures[textureIndex])
         GLES20.glUniform1i(GLES20.glGetUniformLocation(screenProgram, "uTexture"), 0)
+        GLES20.glUniform1f(GLES20.glGetUniformLocation(screenProgram, "uMeanLuminance"), safetyMonitor.meanLuminance)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
     }
 
@@ -264,11 +294,55 @@ class FeedbackTunnelRenderer : GLSurfaceView.Renderer {
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, framebuffers[i])
             GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, textures[i], 0)
             GLES20.glViewport(0, 0, bufferWidth, bufferHeight)
-            GLES20.glClearColor(0.02f, 0.025f, 0.035f, 1f)
+            GLES20.glClearColor(0f, 0f, 0f, 1f)
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
         }
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
         sourceIndex = 0
+        safetyMonitor.reset()
+    }
+
+    private fun clearAccumulationBuffers() {
+        for (i in 0..1) {
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, framebuffers[i])
+            GLES20.glViewport(0, 0, bufferWidth, bufferHeight)
+            GLES20.glClearColor(0f, 0f, 0f, 1f)
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+        }
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+        sourceIndex = 0
+    }
+
+    private fun feedbackDecay(): Float =
+        (0.965f - treble.coerceIn(0f, 1f) * 0.035f - rms.coerceIn(0f, 1f) * 0.012f).coerceIn(0.92f, 0.97f)
+
+    private fun injectedEnergyEstimate(): Float =
+        (rms.coerceIn(0f, 1f) * intensity.coerceIn(0.2f, 2f) * 0.018f + if (beat) 0.015f else 0f)
+            .coerceIn(0f, 0.055f)
+
+    private fun publishStatsIfNeeded() {
+        if (!debugOverlay) return
+        val nowNs = System.nanoTime()
+        if (nowNs - lastStatsNs < 500_000_000L) return
+        val frames = frameNumber - lastStatsFrame
+        val seconds = ((nowNs - lastStatsNs).coerceAtLeast(1L) / 1_000_000_000f).coerceAtLeast(0.001f)
+        lastStatsNs = nowNs
+        lastStatsFrame = frameNumber
+        latestStats = VisualizerDebugStats(
+            fps = frames / seconds,
+            meanLuminance = safetyMonitor.meanLuminance,
+            resetCount = safetyMonitor.resetCount,
+            bands = bands.take(bandCount.coerceIn(0, MAX_BANDS)),
+            live = isPlaying,
+            mode = renderMode
+        )
+        mainHandler.post {
+            Log.d(
+                "JellyMixVisualizer",
+                "fps=${latestStats.fps.roundOne()} mean=${latestStats.meanLuminance.roundOne()} resets=${latestStats.resetCount} bands=${latestStats.bands.take(8)}"
+            )
+            statsCallback?.invoke(latestStats)
+        }
     }
 
     private fun createProgram(vertexSource: String, fragmentSource: String): Int {
@@ -293,6 +367,8 @@ class FeedbackTunnelRenderer : GLSurfaceView.Renderer {
         private const val MAX_POINTS = 256
     }
 }
+
+private fun Float.roundOne(): String = String.format("%.1f", this)
 
 private fun floatBuffer(vararg values: Float): FloatBuffer =
     ByteBuffer.allocateDirect(values.size * 4)
@@ -322,6 +398,7 @@ uniform float uTreble;
 uniform float uBeat;
 uniform float uDirection;
 uniform float uIntensity;
+uniform float uDecay;
 varying vec2 vTexCoord;
 void main() {
     vec2 p = vTexCoord - 0.5;
@@ -333,9 +410,9 @@ void main() {
     float zoom = 1.012 + uBass * 0.026 + uBeat * 0.018;
     vec2 uv = rot * (p * zoom + vec2(warp, -warp)) + 0.5;
     vec4 previous = texture2D(uTexture, uv);
-    float decay = 0.955 - uTreble * 0.045;
-    vec3 color = previous.rgb * decay;
-    color += vec3(0.002, 0.004, 0.006) * uIntensity;
+    vec3 color = previous.rgb * uDecay;
+    color += vec3(0.00045, 0.0008, 0.0011) * uIntensity;
+    color = min(color, vec3(0.82));
     gl_FragColor = vec4(color, 1.0);
 }
 """
@@ -348,7 +425,7 @@ varying float vIndex;
 varying float vEnergy;
 void main() {
     gl_Position = vec4(aPoint.xy, 0.0, 1.0);
-    gl_PointSize = aPoint.z * (0.72 + uRms);
+    gl_PointSize = aPoint.z * (0.58 + uRms * 0.55);
     vIndex = aPoint.w;
     vEnergy = clamp(aPoint.z / 64.0, 0.0, 1.0);
 }
@@ -368,7 +445,7 @@ void main() {
     int index = int(mod(vIndex + floor(uCentroid * 5.0), 5.0));
     vec3 color = uPalette[index];
     color += vec3(uCentroid * 0.18, uCentroid * 0.12, uCentroid * 0.24);
-    gl_FragColor = vec4(color, (core + glow) * (0.28 + vEnergy * 0.72));
+    gl_FragColor = vec4(color, (core + glow) * (0.14 + vEnergy * 0.48));
 }
 """
 
@@ -385,11 +462,16 @@ void main() {
 private const val SCREEN_FRAGMENT_SHADER = """
 precision mediump float;
 uniform sampler2D uTexture;
+uniform float uMeanLuminance;
 varying vec2 vTexCoord;
 void main() {
     vec2 p = vTexCoord - 0.5;
     vec4 color = texture2D(uTexture, vTexCoord);
     float vignette = smoothstep(0.82, 0.18, length(p));
-    gl_FragColor = vec4(color.rgb * (0.72 + vignette * 0.42), 1.0);
+    vec3 mapped = color.rgb * (0.62 + vignette * 0.34);
+    float lum = dot(mapped, vec3(0.2126, 0.7152, 0.0722));
+    float guard = smoothstep(0.72, 0.86, max(lum, uMeanLuminance));
+    mapped = mix(mapped, mapped * 0.72, guard);
+    gl_FragColor = vec4(clamp(mapped, 0.0, 0.82), 1.0);
 }
 """

@@ -595,6 +595,40 @@ class RecommendationTest {
     }
 
     @Test
+    fun feedbackSafetyKeepsHeadlessRenderLuminanceBounded() {
+        val safety = FeedbackSafetyMonitor()
+        val engine = VisualizerAnalysisEngine(bandCount = 48)
+        repeat(300) { index ->
+            val fft = ByteArray(256) { bin ->
+                when {
+                    bin % 17 == 0 -> 96
+                    bin % 29 == 0 -> (-74).toByte()
+                    else -> 0
+                }
+            }
+            val frame = engine.analyzeVisualizerFft(fft, samplingRateMilliHz = 44_100_000, nowMs = 1_000L + index * 16L)
+            val decay = (0.965f - frame.treble * 0.035f - frame.rms * 0.012f).coerceIn(0.92f, 0.97f)
+            val injected = (frame.rms * 0.018f + if (frame.beat) 0.015f else 0f).coerceIn(0f, 0.055f)
+            safety.advance(decay, injected)
+        }
+
+        assertTrue(safety.meanLuminance in 0.05f..0.75f)
+    }
+
+    @Test
+    fun feedbackSafetyResetsRunawayLuminance() {
+        val safety = FeedbackSafetyMonitor()
+        safety.forceMeanForTest(0.9f)
+
+        repeat(31) {
+            safety.advance(decay = 0.97f, injectedEnergy = 0.08f)
+        }
+
+        assertTrue(safety.resetCount > 0)
+        assertTrue(safety.meanLuminance < 0.1f)
+    }
+
+    @Test
     fun connectionCardHidesAfterLibraryLoads() {
         val track = sampleTrack("connected", liked = false, plays = 1, completion = 0.8f)
         val base = JellyMixState(
