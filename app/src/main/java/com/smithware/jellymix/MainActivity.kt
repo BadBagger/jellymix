@@ -3,8 +3,6 @@ package com.smithware.jellymix
 import android.Manifest
 import android.app.Application
 import android.content.Intent
-import android.media.AudioAttributes
-import android.media.MediaPlayer
 import android.media.audiofx.Visualizer
 import android.net.Uri
 import android.os.Build
@@ -136,6 +134,12 @@ import coil.request.ImageRequest
 import com.smithware.jellymix.ui.theme.AccentTheme
 import com.smithware.jellymix.ui.theme.JellyMixTheme
 import com.smithware.jellymix.ui.theme.ThemeMode
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
 import java.io.BufferedReader
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
@@ -230,10 +234,10 @@ class MainActivity : ComponentActivity() {
 class JellyMixViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = application.getSharedPreferences("jellymix", Application.MODE_PRIVATE)
     private val client = JellyfinClient()
-    private var player: MediaPlayer? = null
-    private var preloadedPlayer: MediaPlayer? = null
+    private var player: ExoPlayer? = null
+    private var preloadedPlayer: ExoPlayer? = null
     private var preloadedTrackId: String? = null
-    private var crossfadePlayer: MediaPlayer? = null
+    private var crossfadePlayer: ExoPlayer? = null
     private var crossfadeTrackId: String? = null
     private var playbackMonitorJob: Job? = null
     private var crossfadeJob: Job? = null
@@ -245,8 +249,8 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     private val appContext = application.applicationContext
     private val playbackNotificationController = PlaybackNotificationController(appContext)
     private val musicAudioAttributes = AudioAttributes.Builder()
-        .setUsage(AudioAttributes.USAGE_MEDIA)
-        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+        .setUsage(C.USAGE_MEDIA)
+        .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
         .build()
     private val widgetPlaybackController = object : WidgetPlaybackController {
         override fun togglePlayPause() = this@JellyMixViewModel.togglePlayPause()
@@ -463,7 +467,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         val clamped = progress.coerceIn(0f, 1f)
         val durationMs = (state.currentTrack.durationSec * 1000L).coerceAtLeast(1L)
         runCatching {
-            player?.seekTo((durationMs * clamped).toInt())
+            player?.seekTo((durationMs * clamped).toLong())
         }
         playbackProgress = clamped
         refreshPlaybackNotification()
@@ -867,7 +871,6 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     fun stopPlayback() {
         cancelPlaybackMonitor()
         cancelCrossfade()
-        player?.stop()
         player?.release()
         player = null
         releasePreloadedPlayer()
@@ -1125,8 +1128,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 preloadedPlayer = null
                 preloadedTrackId = null
                 player = preparedPlayer
-                configureActivePlayer(preparedPlayer, track)
-                preparedPlayer.start()
+                preparedPlayer.play()
                 recordPlayStart(track)
                 startPlaybackMonitor(track.id)
                 state = state.copy(
@@ -1168,40 +1170,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             releaseAudioVisualizer()
             releasePreloadedPlayer()
             player?.release()
-            player = MediaPlayer().apply {
-                setAudioAttributes(musicAudioAttributes)
-                setDataSource(appContext, Uri.parse(streamUrl))
-                setOnPreparedListener {
-                    it.start()
-                    recordPlayStart(track)
-                    startPlaybackMonitor(track.id)
-                    state = state.copy(
-                        isPlaying = true,
-                        visualizerBands = syntheticVisualizerBands(track),
-                        audioFrame = visualizerAnalysis.ambient(track),
-                        status = "Playing ${track.title}."
-                    )
-                    persistPlaybackState()
-                    startAudioVisualizer(it.audioSessionId)
-                    preloadUpcomingTrack()
-                }
-                setOnCompletionListener {
-                    handlePlaybackCompletion()
-                }
-                setOnErrorListener { _, _, _ ->
-                    releaseAudioVisualizer()
-                    state = state.copy(
-                        isPlaying = false,
-                        visualizerBands = restingVisualizerBands(),
-                        audioFrame = ambientFrame(),
-                        visualizerMessage = "Visualizer paused after playback error.",
-                        status = "Playback failed for ${track.title}."
-                    )
-                    persistPlaybackState()
-                    true
-                }
-                prepareAsync()
-            }
+            player = buildStreamingPlayer(track, streamUrl, playWhenReady = true).also { it.prepare() }
         }.onFailure { error ->
             releaseAudioVisualizer()
             state = state.copy(
@@ -1215,23 +1184,53 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    private fun configureActivePlayer(mediaPlayer: MediaPlayer, track: Track) {
-        mediaPlayer.setOnCompletionListener {
-            handlePlaybackCompletion()
+    private fun buildStreamingPlayer(track: Track, streamUrl: String, playWhenReady: Boolean): ExoPlayer =
+        ExoPlayer.Builder(appContext).build().apply {
+            setAudioAttributes(musicAudioAttributes, true)
+            setMediaItem(MediaItem.fromUri(Uri.parse(streamUrl)))
+            this.playWhenReady = playWhenReady
+            addListener(object : Player.Listener {
+                private var started = false
+
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    when (playbackState) {
+                        Player.STATE_READY -> {
+                            if (state.currentTrack.id != track.id && preloadedTrackId != track.id) return
+                            if (playWhenReady && !started) {
+                                started = true
+                                recordPlayStart(track)
+                                startPlaybackMonitor(track.id)
+                                state = state.copy(
+                                    isPlaying = true,
+                                    visualizerBands = syntheticVisualizerBands(track),
+                                    audioFrame = visualizerAnalysis.ambient(track),
+                                    status = "Playing ${track.title}."
+                                )
+                                persistPlaybackState()
+                                startAudioVisualizer(audioSessionId)
+                                preloadUpcomingTrack()
+                            }
+                        }
+                        Player.STATE_ENDED -> {
+                            if (state.currentTrack.id == track.id) handlePlaybackCompletion()
+                        }
+                    }
+                }
+
+                override fun onPlayerError(error: PlaybackException) {
+                    if (state.currentTrack.id != track.id) return
+                    releaseAudioVisualizer()
+                    state = state.copy(
+                        isPlaying = false,
+                        visualizerBands = restingVisualizerBands(),
+                        audioFrame = ambientFrame(),
+                        visualizerMessage = "Visualizer paused after playback error.",
+                        status = "Playback failed for ${track.title}: ${error.cleanMessage()}"
+                    )
+                    persistPlaybackState()
+                }
+            })
         }
-        mediaPlayer.setOnErrorListener { _, _, _ ->
-            releaseAudioVisualizer()
-            state = state.copy(
-                isPlaying = false,
-                visualizerBands = restingVisualizerBands(),
-                audioFrame = ambientFrame(),
-                visualizerMessage = "Visualizer paused after playback error.",
-                status = "Playback failed for ${track.title}."
-            )
-            persistPlaybackState()
-            true
-        }
-    }
 
     private fun handlePlaybackCompletion() {
         cancelPlaybackMonitor()
@@ -1274,65 +1273,66 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         if (nextTrack.id == fromTrackId) return
         val streamUrl = client.streamUrl(state.serverUrl, nextTrack.id, state.token)
         crossfadeTrackId = nextTrack.id
-        oldPlayer.setOnCompletionListener { }
         runCatching {
-            crossfadePlayer = MediaPlayer().apply {
-                setAudioAttributes(musicAudioAttributes)
-                setVolume(0f, 0f)
-                setDataSource(appContext, Uri.parse(streamUrl))
-                setOnPreparedListener { nextPlayer ->
-                    if (!state.isPlaying || state.currentTrack.id != fromTrackId || crossfadeTrackId != nextTrack.id) {
-                        nextPlayer.release()
-                        if (crossfadePlayer === nextPlayer) {
-                            crossfadePlayer = null
-                            crossfadeTrackId = null
+            crossfadePlayer = ExoPlayer.Builder(appContext).build().apply {
+                setAudioAttributes(musicAudioAttributes, true)
+                volume = 0f
+                setMediaItem(MediaItem.fromUri(Uri.parse(streamUrl)))
+                playWhenReady = false
+                addListener(object : Player.Listener {
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        if (playbackState != Player.STATE_READY) return
+                        val nextPlayer = this@apply
+                        if (!state.isPlaying || state.currentTrack.id != fromTrackId || crossfadeTrackId != nextTrack.id) {
+                            nextPlayer.release()
+                            if (crossfadePlayer === nextPlayer) {
+                                crossfadePlayer = null
+                                crossfadeTrackId = null
+                            }
+                            return
                         }
-                        return@setOnPreparedListener
+                        crossfadePlayer = null
+                        releaseAudioVisualizer()
+                        player = nextPlayer
+                        nextPlayer.play()
+                        recordPlayStart(nextTrack)
+                        state = state.copy(
+                            currentTrack = nextTrack,
+                            queue = continuation.queue,
+                            queueIndex = continuation.queueIndex,
+                            queueTitle = continuation.queueTitle,
+                            isPlaying = true,
+                            visualizerBands = syntheticVisualizerBands(nextTrack),
+                            audioFrame = visualizerAnalysis.ambient(nextTrack),
+                            status = "Melding into ${nextTrack.title}."
+                        )
+                        persistPlaybackState()
+                        startAudioVisualizer(nextPlayer.audioSessionId)
+                        fadeBetweenPlayers(oldPlayer, nextPlayer, nextTrack.id)
+                        startPlaybackMonitor(nextTrack.id)
+                        preloadUpcomingTrack()
                     }
-                    crossfadePlayer = null
-                    releaseAudioVisualizer()
-                    player = nextPlayer
-                    configureActivePlayer(nextPlayer, nextTrack)
-                    nextPlayer.start()
-                    recordPlayStart(nextTrack)
-                    state = state.copy(
-                        currentTrack = nextTrack,
-                        queue = continuation.queue,
-                        queueIndex = continuation.queueIndex,
-                        queueTitle = continuation.queueTitle,
-                        isPlaying = true,
-                        visualizerBands = syntheticVisualizerBands(nextTrack),
-                        audioFrame = visualizerAnalysis.ambient(nextTrack),
-                        status = "Melding into ${nextTrack.title}."
-                    )
-                    persistPlaybackState()
-                    startAudioVisualizer(nextPlayer.audioSessionId)
-                    fadeBetweenPlayers(oldPlayer, nextPlayer, nextTrack.id)
-                    startPlaybackMonitor(nextTrack.id)
-                    preloadUpcomingTrack()
-                }
-                setOnErrorListener { _, _, _ ->
-                    configureActivePlayer(oldPlayer, state.currentTrack)
-                    crossfadePlayer = null
-                    crossfadeTrackId = null
-                    true
-                }
-                prepareAsync()
+
+                    override fun onPlayerError(error: PlaybackException) {
+                        crossfadePlayer = null
+                        crossfadeTrackId = null
+                    }
+                })
+                prepare()
             }
         }.onFailure {
-            configureActivePlayer(oldPlayer, state.currentTrack)
             cancelCrossfade()
         }
     }
 
-    private fun fadeBetweenPlayers(oldPlayer: MediaPlayer, nextPlayer: MediaPlayer, nextTrackId: String) {
+    private fun fadeBetweenPlayers(oldPlayer: ExoPlayer, nextPlayer: ExoPlayer, nextTrackId: String) {
         crossfadeJob?.cancel()
         crossfadeJob = viewModelScope.launch {
             val steps = 14
             repeat(steps + 1) { index ->
                 val progress = index.toFloat() / steps.toFloat()
-                runCatching { oldPlayer.setVolume(1f - progress, 1f - progress) }
-                runCatching { nextPlayer.setVolume(progress, progress) }
+                runCatching { oldPlayer.volume = 1f - progress }
+                runCatching { nextPlayer.volume = progress }
                 delay(CrossfadeDurationMs / steps)
             }
             runCatching { oldPlayer.release() }
@@ -1409,10 +1409,13 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         val streamUrl = client.streamUrl(state.serverUrl, track.id, state.token)
         runCatching {
             preloadedTrackId = track.id
-            preloadedPlayer = MediaPlayer().apply {
-                setAudioAttributes(musicAudioAttributes)
-                setDataSource(appContext, Uri.parse(streamUrl))
-                setOnPreparedListener {
+            preloadedPlayer = ExoPlayer.Builder(appContext).build().apply {
+                setAudioAttributes(musicAudioAttributes, true)
+                setMediaItem(MediaItem.fromUri(Uri.parse(streamUrl)))
+                playWhenReady = false
+                addListener(object : Player.Listener {
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        if (playbackState != Player.STATE_READY) return
                     val nextQueuedId = state.queue.getOrNull(nextQueueIndex(state.queueIndex, state.queue.size, state.repeatEnabled))?.id
                     val isCurrentPausedPreload = !state.isPlaying && state.currentTrack.id == track.id
                     val isUpcomingPlaybackPreload = state.isPlaying && nextQueuedId == track.id
@@ -1420,11 +1423,11 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                         releasePreloadedPlayer()
                     }
                 }
-                setOnErrorListener { _, _, _ ->
-                    releasePreloadedPlayer()
-                    true
-                }
-                prepareAsync()
+                    override fun onPlayerError(error: PlaybackException) {
+                        releasePreloadedPlayer()
+                    }
+                })
+                prepare()
             }
         }.onFailure {
             releasePreloadedPlayer()
