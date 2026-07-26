@@ -527,7 +527,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 val currentLocalPlays = state.localPlays
                 val currentRecentIds = state.recentTrackIds
                 val prepared = withContext(Dispatchers.IO) {
-                    val tracks = library.tracks.ifEmpty { sampleTracks }
+                    val tracks = library.tracks
                     val trackIds = tracks.map { it.id }.toHashSet()
                     PreparedLibraryState(
                         tracks = tracks,
@@ -1745,8 +1745,13 @@ private fun JellyMixApp(
             else -> emptyList()
         }
     }
-    val libraryTracks = remember(state.selectedTab, showNowPlaying, state.tracks, state.searchQuery) {
-        if (state.selectedTab == Tab.Library && !showNowPlaying) filterTracks(state.tracks, state.searchQuery) else emptyList()
+    val canShowLibraryTracks = state.isConnected && state.tracks.none { it.id.startsWith("sample-") }
+    val libraryTracks = remember(state.selectedTab, showNowPlaying, canShowLibraryTracks, state.tracks, state.searchQuery) {
+        if (state.selectedTab == Tab.Library && !showNowPlaying && canShowLibraryTracks) {
+            filterTracks(state.tracks, state.searchQuery)
+        } else {
+            emptyList()
+        }
     }
     val libraryBrowseData = remember(state.libraryBrowseMode, libraryTracks) {
         buildLibraryBrowseData(state.libraryBrowseMode, libraryTracks)
@@ -1973,24 +1978,40 @@ private fun JellyMixApp(
                         item(contentType = "jarvis-results") { JarvisResultsSection(state, viewModel::sendDjPrompt, viewModel::selectTrack) }
                     }
                     Tab.Library -> {
-                        item(contentType = "search") { SearchCard(state.searchQuery, viewModel::setSearchQuery, libraryTracks.size) }
+                        item(contentType = "search") {
+                            SearchCard(
+                                query = state.searchQuery,
+                                onQueryChange = viewModel::setSearchQuery,
+                                matchCount = libraryTracks.size,
+                                libraryReady = canShowLibraryTracks
+                            )
+                        }
                         item(contentType = "segment") { LibraryBrowseSegmentControl(state.libraryBrowseMode, viewModel::setLibraryBrowseMode) }
-                        item(contentType = "library-summary") { LibrarySummary(libraryTracks, state.rawTrackCount) }
-                        item(contentType = "library-actions") { LibraryActions(libraryTracks, state.libraryBrowseMode, viewModel::startQueue, viewModel::startShuffledQueue) }
-                        libraryBrowseContent(
-                            data = libraryBrowseData,
-                            liked = state.liked,
-                            onTrackSelected = viewModel::selectTrack,
-                            onQueueSelected = viewModel::startQueue
-                        )
-                        item(contentType = "chips") { SavedDiscoveryFilters(viewModel::setDiscoveryFilter) }
-                        trackRowsSection(
-                            title = state.discoveryFilter.sectionTitle,
-                            tracks = discoveryTracks,
-                            liked = state.liked,
-                            keyPrefix = "discovery",
-                            onTrackSelected = viewModel::selectTrack
-                        )
+                        if (canShowLibraryTracks) {
+                            item(contentType = "library-summary") { LibrarySummary(libraryTracks, state.rawTrackCount) }
+                            item(contentType = "library-actions") { LibraryActions(libraryTracks, state.libraryBrowseMode, viewModel::startQueue, viewModel::startShuffledQueue) }
+                            libraryBrowseContent(
+                                data = libraryBrowseData,
+                                liked = state.liked,
+                                onTrackSelected = viewModel::selectTrack,
+                                onQueueSelected = viewModel::startQueue
+                            )
+                            item(contentType = "chips") { SavedDiscoveryFilters(viewModel::setDiscoveryFilter) }
+                            trackRowsSection(
+                                title = state.discoveryFilter.sectionTitle,
+                                tracks = discoveryTracks,
+                                liked = state.liked,
+                                keyPrefix = "discovery",
+                                onTrackSelected = viewModel::selectTrack
+                            )
+                        } else {
+                            item(contentType = "empty") {
+                                EmptyState(
+                                    "Library not loaded",
+                                    "Reload Jellyfin from the card above or open Settings to edit the server connection."
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -2014,6 +2035,10 @@ private fun JellyMixApp(
                 ModalBottomSheet(onDismissRequest = { showSettingsSheet = false }) {
                     SettingsSheet(
                         state = state,
+                        onServerUrlChange = viewModel::setServerUrl,
+                        onUsernameChange = viewModel::setUsername,
+                        onPasswordChange = viewModel::setPassword,
+                        onConnect = viewModel::connect,
                         onThemeModeSelected = viewModel::setThemeMode,
                         onAccentThemeSelected = viewModel::setAccentTheme,
                         onVisualizerDebugOverlayChanged = viewModel::setVisualizerDebugOverlay,
@@ -2072,6 +2097,10 @@ private fun AppHeader(title: String, connectionLabel: String, onOpenSettings: ()
 @Composable
 private fun SettingsSheet(
     state: JellyMixState,
+    onServerUrlChange: (String) -> Unit,
+    onUsernameChange: (String) -> Unit,
+    onPasswordChange: (String) -> Unit,
+    onConnect: () -> Unit,
     onThemeModeSelected: (ThemeMode) -> Unit,
     onAccentThemeSelected: (AccentTheme) -> Unit,
     onVisualizerDebugOverlayChanged: (Boolean) -> Unit,
@@ -2099,14 +2128,46 @@ private fun SettingsSheet(
         item(contentType = "settings-account") {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Jellyfin", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                OutlinedTextField(
+                    value = state.serverUrl,
+                    onValueChange = onServerUrlChange,
+                    label = { Text("Server URL") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = state.username,
+                    onValueChange = onUsernameChange,
+                    label = { Text("Username") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = state.password,
+                    onValueChange = onPasswordChange,
+                    label = { Text("Password") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                     Button(
+                        onClick = onConnect,
+                        enabled = !state.isLoading,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(if (state.hasSession) "Reconnect" else "Connect")
+                    }
+                    OutlinedButton(
                         onClick = onReload,
                         enabled = state.hasSession && !state.isLoading,
                         modifier = Modifier.weight(1f)
                     ) {
                         Text("Reload")
                     }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                    Spacer(Modifier.weight(1f))
                     OutlinedButton(
                         onClick = onClearSession,
                         enabled = state.hasSession,
@@ -2437,7 +2498,12 @@ private fun SpeedDialTile(
 }
 
 @Composable
-private fun SearchCard(query: String, onQueryChange: (String) -> Unit, matchCount: Int) {
+private fun SearchCard(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    matchCount: Int,
+    libraryReady: Boolean = true
+) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             OutlinedTextField(
@@ -2448,7 +2514,11 @@ private fun SearchCard(query: String, onQueryChange: (String) -> Unit, matchCoun
                 modifier = Modifier.fillMaxWidth()
             )
             Text(
-                if (query.isBlank()) "Showing your full music set." else "$matchCount matches",
+                when {
+                    !libraryReady -> "Jellyfin library is not loaded yet."
+                    query.isBlank() -> "Showing your full music set."
+                    else -> "$matchCount matches"
+                },
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
