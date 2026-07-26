@@ -160,6 +160,7 @@ internal const val WIDGET_ACTION_STOP = "com.smithware.jellymix.widget.STOP"
 private const val DefaultJarvisPrompt = "Tell me what you want to hear. I can go deeper, keep it familiar, make it louder, chill it out, or build around an artist."
 private const val CrossfadeDurationMs = 2_800L
 private const val CrossfadeTriggerRemainingMs = 3_400L
+private const val JellyfinPageSize = 500
 
 class MainActivity : ComponentActivity() {
     private val viewModel: JellyMixViewModel by viewModels()
@@ -515,9 +516,15 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             runCatching {
                 withContext(Dispatchers.IO) {
+                    client.publicSystemInfo(serverUrl)
+                    val trackFetch = client.fetchAudioTracksWithCount(state.serverUrl, state.userId, state.token)
+                    val playlists = runCatching {
+                        client.fetchPlaylists(state.serverUrl, state.userId, state.token)
+                    }.getOrDefault(emptyList())
                     JellyfinLibraryLoad(
-                        tracks = client.fetchAudioTracks(state.serverUrl, state.userId, state.token),
-                        playlists = client.fetchPlaylists(state.serverUrl, state.userId, state.token)
+                        tracks = trackFetch.tracks,
+                        playlists = playlists,
+                        rawTrackCount = trackFetch.rawTrackCount
                     )
                 }
             }.onSuccess { library ->
@@ -1560,7 +1567,7 @@ private class JellyfinClient {
         )
     }
 
-    fun fetchAudioTracks(serverUrl: String, userId: String, token: String): List<Track> {
+    fun fetchAudioTracksWithCount(serverUrl: String, userId: String, token: String): JellyfinTrackFetch {
         val views = requestJson("$serverUrl/Users/$userId/Views", "GET", null, token)
             .optJSONArray("Items")
         val musicLibraryId = (0 until (views?.length() ?: 0))
@@ -1568,15 +1575,27 @@ private class JellyfinClient {
             .firstOrNull { it.optString("CollectionType") == "music" }
             ?.optString("Id")
 
-        val url = buildString {
-            append("$serverUrl/Users/$userId/Items?Recursive=true&IncludeItemTypes=Audio")
-            append("&StartIndex=0&Limit=10000")
-            append("&Fields=Genres,UserData,RunTimeTicks,Album,Artists,ImageTags,AlbumId,AlbumPrimaryImageTag,Bitrate,MediaSources,Path")
-            append("&SortBy=DatePlayed,SortName&SortOrder=Descending")
-            if (!musicLibraryId.isNullOrBlank()) append("&ParentId=${Uri.encode(musicLibraryId)}")
-        }
-        val items = requestJson(url, "GET", null, token).optJSONArray("Items") ?: return emptyList()
-        return deduplicateTracks(items.toTracks(serverUrl, token))
+        val allTracks = mutableListOf<Track>()
+        var startIndex = 0
+        var totalCount = 0
+        do {
+            val url = buildString {
+                append("$serverUrl/Users/$userId/Items?Recursive=true&IncludeItemTypes=Audio")
+                append("&StartIndex=$startIndex&Limit=$JellyfinPageSize")
+                append("&Fields=Genres,UserData,RunTimeTicks,Album,Artists,ImageTags,AlbumId,AlbumPrimaryImageTag,Bitrate,MediaSources,Path")
+                append("&SortBy=DatePlayed,SortName&SortOrder=Descending")
+                if (!musicLibraryId.isNullOrBlank()) append("&ParentId=${Uri.encode(musicLibraryId)}")
+            }
+            val json = requestJson(url, "GET", null, token)
+            val items = json.optJSONArray("Items") ?: break
+            totalCount = json.optInt("TotalRecordCount", totalCount).takeIf { it > 0 } ?: totalCount
+            allTracks += items.toTracks(serverUrl, token)
+            startIndex += items.length()
+        } while (items.length() == JellyfinPageSize && startIndex < totalCount.coerceAtLeast(startIndex + 1))
+        return JellyfinTrackFetch(
+            tracks = deduplicateTracks(allTracks),
+            rawTrackCount = totalCount.takeIf { it > 0 } ?: allTracks.size
+        )
     }
 
     fun fetchPlaylists(serverUrl: String, userId: String, token: String): List<JellyfinPlaylist> {
@@ -1586,7 +1605,13 @@ private class JellyfinClient {
             val item = items.getJSONObject(index)
             val id = item.optString("Id").takeIf { it.isNotBlank() } ?: return@mapNotNull null
             val fetchedCount = runCatching {
-                requestJson("$serverUrl/Playlists/${Uri.encode(id)}/Items?UserId=${Uri.encode(userId)}&Limit=1", "GET", null, token)
+                requestJson(
+                    url = "$serverUrl/Playlists/${Uri.encode(id)}/Items?UserId=${Uri.encode(userId)}&Limit=1",
+                    method = "GET",
+                    body = null,
+                    token = token,
+                    readTimeoutMs = 4_000
+                )
                     .optInt("TotalRecordCount", 0)
             }.getOrDefault(0)
             JellyfinPlaylist(
@@ -1637,14 +1662,28 @@ private class JellyfinClient {
     private fun imageUrlOrNull(serverUrl: String, itemId: String, token: String, hasPrimaryImage: Boolean): String? =
         if (hasPrimaryImage) imageUrl(serverUrl, itemId, token) else null
 
-    private fun requestJson(url: String, method: String, body: String?, token: String?): JSONObject =
-        JSONObject(requestText(url, method, body, token))
+    private fun requestJson(
+        url: String,
+        method: String,
+        body: String?,
+        token: String?,
+        connectTimeoutMs: Int = 12_000,
+        readTimeoutMs: Int = 20_000
+    ): JSONObject =
+        JSONObject(requestText(url, method, body, token, connectTimeoutMs, readTimeoutMs))
 
-    private fun requestText(url: String, method: String, body: String?, token: String?): String {
+    private fun requestText(
+        url: String,
+        method: String,
+        body: String?,
+        token: String?,
+        connectTimeoutMs: Int = 12_000,
+        readTimeoutMs: Int = 20_000
+    ): String {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = method
-            connectTimeout = 12_000
-            readTimeout = 20_000
+            connectTimeout = connectTimeoutMs
+            readTimeout = readTimeoutMs
             setRequestProperty("Accept", "application/json")
             setRequestProperty("X-Emby-Authorization", "MediaBrowser Client=\"JellyMix\", Device=\"Android\", DeviceId=\"jellymix-android\", Version=\"0.1.0\"")
             if (!token.isNullOrBlank()) setRequestProperty("X-Emby-Token", token)
@@ -4726,6 +4765,8 @@ data class DjMessage(val speaker: String, val text: String)
 data class JellyfinPlaylist(val id: String, val name: String, val childCount: Int, val imageUrl: String?)
 
 private data class JellyfinSession(val token: String, val userId: String)
+
+private data class JellyfinTrackFetch(val tracks: List<Track>, val rawTrackCount: Int)
 
 private data class JellyfinLibraryLoad(val tracks: List<Track>, val playlists: List<JellyfinPlaylist>, val rawTrackCount: Int = tracks.sumOf { 1 + it.alternates.size })
 
