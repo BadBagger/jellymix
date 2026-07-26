@@ -851,11 +851,13 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun skip() {
+        interruptActivePlaybackForManualSwitch()
         advanceQueue(countSkip = true, keepPlaying = state.isPlaying)
     }
 
     fun previous() {
-        val queue = state.queue.ifEmpty { state.rankedTracks() }
+        interruptActivePlaybackForManualSwitch()
+        val queue = state.queue.ifEmpty { lightweightPlaybackFallbackQueue() }
         val previousIndex = previousQueueIndex(state.queueIndex, queue.size, state.repeatEnabled)
         val previousTrack = queue.getOrNull(previousIndex) ?: state.currentTrack
         state = state.copy(
@@ -868,6 +870,23 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         playbackProgress = previousTrack.completion.coerceIn(0f, 1f)
         persistPlaybackState()
         scheduleCurrentTrackLoad()
+    }
+
+    private fun lightweightPlaybackFallbackQueue(): List<Track> {
+        val playbackTracks = fullLibrarySnapshot?.tracks?.takeIf { it.isNotEmpty() } ?: state.tracks
+        return playbackTracks
+            .asSequence()
+            .filterNot { it.id == state.currentTrack.id }
+            .take(600)
+            .toList()
+            .ifEmpty { playbackTracks.take(1) }
+    }
+
+    private fun interruptActivePlaybackForManualSwitch() {
+        cancelCrossfade()
+        cancelPlaybackMonitor()
+        runCatching { player?.pause() }
+        releaseAudioVisualizer()
     }
 
     fun stopPlayback() {
@@ -1014,32 +1033,37 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             state = state.copy(skips = state.skips + (currentId to ((state.skips[currentId] ?: 0) + 1)))
         }
         val playbackTracks = fullLibrarySnapshot?.tracks?.takeIf { it.isNotEmpty() } ?: state.tracks
-        val fallbackQueue = rankedPlayableTracks(playbackTracks)
         val hadQueue = state.queue.isNotEmpty()
+        var fallbackQueue: List<Track>? = null
+        fun fallbackTracks(): List<Track> {
+            val existing = fallbackQueue
+            if (existing != null) return existing
+            return rankedPlayableTracks(playbackTracks).also { fallbackQueue = it }
+        }
         val queue = state.queue.ifEmpty {
             buildContinuationQueue(
                 seed = state.currentTrack,
                 tracks = playbackTracks,
-                fallbackTracks = fallbackQueue,
+                fallbackTracks = fallbackTracks(),
                 liked = state.liked,
                 longListens = state.longListens,
                 skips = state.skips,
                 localPlays = state.localPlays,
                 recentlyPlayedIds = state.recentTrackIds
-            ).ifEmpty { fallbackQueue }
+            ).ifEmpty { fallbackTracks() }
         }
         val reachedEnd = hadQueue && isQueueEnd(state.queueIndex, queue.size, state.repeatEnabled)
         val nextQueue = if (reachedEnd && !state.repeatEnabled) {
             buildContinuationQueue(
                 seed = state.currentTrack,
                 tracks = playbackTracks,
-                fallbackTracks = fallbackQueue,
+                fallbackTracks = fallbackTracks(),
                 liked = state.liked,
                 longListens = state.longListens,
                 skips = state.skips,
                 localPlays = state.localPlays,
                 recentlyPlayedIds = state.recentTrackIds
-            )
+            ).ifEmpty { fallbackTracks() }
         } else {
             queue
         }
@@ -1048,7 +1072,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             reachedEnd && !state.repeatEnabled -> 0
             else -> nextQueueIndex(state.queueIndex, nextQueue.size, state.repeatEnabled)
         }
-        val nextTrack = nextQueue.getOrNull(nextIndex) ?: fallbackQueue.first()
+        val nextTrack = nextQueue.getOrNull(nextIndex) ?: fallbackTracks().first()
         state = state.copy(
             currentTrack = nextTrack,
             queue = nextQueue,
@@ -1428,7 +1452,14 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     private fun preloadUpcomingTrack() {
         if (!state.isPlaying || state.token.isBlank()) return
         val queue = state.queue
-        val nextTrack = queue.getOrNull(nextQueueIndex(state.queueIndex, queue.size, state.repeatEnabled))
+        if (queue.size <= 1) return
+        val nextIndex = state.queueIndex + 1
+        val resolvedIndex = when {
+            nextIndex < queue.size -> nextIndex
+            state.repeatEnabled -> 0
+            else -> return
+        }
+        val nextTrack = queue.getOrNull(resolvedIndex)
             ?.takeIf { it.id != state.currentTrack.id && !it.id.startsWith("sample-") }
             ?: return
         preloadTrack(nextTrack)
@@ -1447,7 +1478,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 addListener(object : Player.Listener {
                     override fun onPlaybackStateChanged(playbackState: Int) {
                         if (playbackState != Player.STATE_READY) return
-                    val nextQueuedId = state.queue.getOrNull(nextQueueIndex(state.queueIndex, state.queue.size, state.repeatEnabled))?.id
+                    val nextQueuedId = state.queue.getOrNull((state.queueIndex + 1).takeIf { it < state.queue.size } ?: if (state.repeatEnabled) 0 else -1)?.id
                     val isCurrentPausedPreload = !state.isPlaying && state.currentTrack.id == track.id
                     val isUpcomingPlaybackPreload = state.isPlaying && nextQueuedId == track.id
                     if (preloadedTrackId != track.id || (!isCurrentPausedPreload && !isUpcomingPlaybackPreload)) {
