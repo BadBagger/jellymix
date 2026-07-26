@@ -2,9 +2,11 @@ package com.smithware.jellymix
 
 import com.smithware.jellymix.ui.theme.ThemeMode
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.json.JSONObject
+import kotlin.math.absoluteValue
 
 class RecommendationTest {
     @Test
@@ -55,7 +57,7 @@ class RecommendationTest {
         )
 
         assertEquals(
-            listOf("Weekly Discovery", "Heavy Rotation", "Long Listen Mix", "Quick Shuffle", "Rediscover", "Liked Radio", "Indie Radio", "Warm Flow"),
+            listOf("Weekly Discovery", "Heavy Rotation", "Long Listen Mix", "Quick Shuffle", "Rediscover", "Liked Radio", "Library Radio", "Loud Flow"),
             mixes.map { it.name }
         )
         assertEquals("2", mixes.first { it.name == "Long Listen Mix" }.tracks.first().id)
@@ -254,7 +256,8 @@ class RecommendationTest {
             query = "sad",
             liked = mapOf("loud" to true),
             longListens = emptyMap(),
-            localPlays = emptyMap()
+            localPlays = emptyMap(),
+            minQualifying = 1
         )
 
         assertEquals("Sad Vibe", mixes.first().name)
@@ -270,7 +273,8 @@ class RecommendationTest {
             query = "gym",
             liked = mapOf("quiet" to true),
             longListens = emptyMap(),
-            localPlays = emptyMap()
+            localPlays = emptyMap(),
+            minQualifying = 1
         )
 
         assertEquals("Workout Vibe", mixes.first().name)
@@ -291,21 +295,24 @@ class RecommendationTest {
     @Test
     fun carBrowseVibesAndJarvisReturnPlayableQueues() {
         val calm = sampleTrack("calm", liked = false, plays = 1, completion = 0.6f).copy(mood = "Calm", genre = "Ambient")
+        val calmTwo = sampleTrack("calm-2", liked = false, plays = 1, completion = 0.6f).copy(artist = "Quiet Two", mood = "Calm", genre = "Ambient")
+        val calmThree = sampleTrack("calm-3", liked = false, plays = 1, completion = 0.6f).copy(artist = "Quiet Three", mood = "Calm", genre = "Ambient")
         val loud = sampleTrack("loud", liked = true, plays = 20, completion = 0.95f).copy(mood = "Loud", genre = "Rock")
+        val library = listOf(loud, calm, calmTwo, calmThree)
 
         val vibes = buildCarBrowseEntries(
             parentId = CAR_VIBES_ID,
-            tracks = listOf(loud, calm),
+            tracks = library,
             liked = mapOf("loud" to true)
         )
         val chillTracks = buildCarBrowseEntries(
             parentId = vibes.first { it.title == "Chill Vibe" }.id,
-            tracks = listOf(loud, calm),
+            tracks = library,
             liked = mapOf("loud" to true)
         )
         val jarvisTracks = buildCarBrowseEntries(
             parentId = CAR_JARVIS_ID,
-            tracks = listOf(loud, calm),
+            tracks = library,
             seed = calm,
             djMode = GuestDjMode.Chill
         )
@@ -343,6 +350,103 @@ class RecommendationTest {
 
         assertEquals("Window Vibe", mixes.first().name)
         assertEquals("rain", mixes.first().tracks.first().id)
+    }
+
+    @Test
+    fun vibeRegionsUseAudioFeaturesInsteadOfPopularityWinner() {
+        val popular = sampleTrack("popular", liked = true, plays = 100, completion = 0.99f).copy(artist = "Popular", genre = "Rock", mood = "Loud")
+        val chill = sampleTrack("chill", liked = false, plays = 1, completion = 0.5f).copy(artist = "Chill", genre = "Ambient", mood = "Calm")
+        val hype = sampleTrack("hype", liked = false, plays = 1, completion = 0.5f).copy(artist = "Hype", genre = "Electronic", mood = "Drive")
+        val angry = sampleTrack("angry", liked = false, plays = 1, completion = 0.5f).copy(artist = "Angry", genre = "Metal", mood = "Loud")
+        val features = mapOf(
+            popular.id to TrackAudioFeatures(110f, 0.55f, 0.55f, 0.55f, 0.8f, 0.8f, 0.5f),
+            chill.id to TrackAudioFeatures(86f, 0.25f, 0.34f, 0.3f, 0.52f, 0.3f, 0.7f),
+            hype.id to TrackAudioFeatures(136f, 0.86f, 0.82f, 0.52f, 0.72f, 0.7f, 0.8f),
+            angry.id to TrackAudioFeatures(128f, 0.88f, 0.32f, 0.84f, 0.18f, 0.8f, 0.55f)
+        )
+
+        val mixes = buildVibeMixes(
+            tracks = listOf(popular, chill, hype, angry),
+            query = "",
+            liked = mapOf(popular.id to true),
+            longListens = emptyMap(),
+            localPlays = emptyMap(),
+            features = features,
+            minQualifying = 1,
+            daySeed = "2026-07-25"
+        )
+
+        assertEquals("chill", mixes.first { it.name == "Chill Vibe" }.tracks.first().id)
+        assertEquals("hype", mixes.first { it.name == "Hype Vibe" }.tracks.first().id)
+        assertEquals("angry", mixes.first { it.name == "Angry Vibe" }.tracks.first().id)
+        assertNotEquals(
+            mixes.first { it.name == "Chill Vibe" }.tracks.first().id,
+            mixes.first { it.name == "Hype Vibe" }.tracks.first().id
+        )
+    }
+
+    @Test
+    fun vibeWithTooSmallRegionSurfacesNotEnoughTracks() {
+        val onlyHype = sampleTrack("hype", liked = true, plays = 30, completion = 0.95f).copy(genre = "Electronic", mood = "Drive")
+        val features = mapOf(onlyHype.id to TrackAudioFeatures(136f, 0.9f, 0.8f, 0.52f, 0.7f, 0.6f, 0.8f))
+
+        val mixes = buildVibeMixes(
+            tracks = listOf(onlyHype),
+            query = "hype",
+            liked = mapOf(onlyHype.id to true),
+            longListens = emptyMap(),
+            localPlays = emptyMap(),
+            features = features,
+            minQualifying = 3
+        )
+
+        assertEquals("Hype Vibe", mixes.first().name)
+        assertTrue(mixes.first().tracks.isEmpty())
+        assertTrue(mixes.first().note!!.contains("Need at least 3"))
+    }
+
+    @Test
+    fun generatedMixesRespectDiversityAndDailySeed() {
+        val tracks = (0 until 160).map { index ->
+            sampleTrack("diverse-$index", liked = index % 7 == 0, plays = 30 - (index % 20), completion = 0.65f + (index % 5) * 0.06f)
+                .copy(
+                    artist = "Artist ${index % 80}",
+                    album = "Album ${index % 90}",
+                    genre = if (index % 3 == 0) "Electronic" else if (index % 3 == 1) "Rock" else "Indie",
+                    mood = if (index % 4 == 0) "Drive" else if (index % 4 == 1) "Loud" else "Warm",
+                    durationSec = 180 + index
+                )
+        }
+        val features = tracks.associate { it.id to inferAudioFeatures(it) }
+
+        val mixes = buildMixes(
+            rankedTracks = tracks,
+            liked = tracks.associate { it.id to it.liked },
+            longListens = tracks.associate { it.id to if (it.id.endsWith("4")) 2 else 0 },
+            skips = emptyMap(),
+            localPlays = tracks.associate { it.id to (it.id.hashCode().absoluteValue % 4) },
+            features = features,
+            daySeed = "2026-07-25"
+        )
+        val usage = mixes.flatMap { it.tracks }.groupingBy { it.id }.eachCount()
+        val quickToday = mixes.first { it.name == "Quick Shuffle" }.tracks.map { it.id }
+        val quickTomorrow = buildMixes(
+            rankedTracks = tracks,
+            liked = tracks.associate { it.id to it.liked },
+            longListens = emptyMap(),
+            skips = emptyMap(),
+            localPlays = emptyMap(),
+            features = features,
+            daySeed = "2026-07-26"
+        ).first { it.name == "Quick Shuffle" }.tracks.map { it.id }
+
+        assertTrue(usage.values.all { it <= 2 })
+        mixes.forEach { mix ->
+            assertTrue(mix.tracks.groupingBy { it.artist }.eachCount().values.all { it <= 2 })
+            assertTrue(mix.tracks.groupingBy { it.album }.eachCount().values.all { it <= 2 })
+            assertTrue(mix.tracks.windowed(6, 1, partialWindows = true).all { window -> window.map { it.artist }.size == window.map { it.artist }.toSet().size })
+        }
+        assertNotEquals(quickToday.take(10), quickTomorrow.take(10))
     }
 
     @Test
@@ -386,6 +490,14 @@ class RecommendationTest {
     }
 
     @Test
+    fun oldBottomTabsMigrateToMixesTab() {
+        assertEquals(Tab.Mixes, "Vibe".toTabOrDefault(Tab.Home))
+        assertEquals(Tab.Mixes, "Playlists".toTabOrDefault(Tab.Home))
+        assertEquals(Tab.Discover, "Discover".toTabOrDefault(Tab.Home))
+        assertEquals(Tab.Home, "Unknown".toTabOrDefault(Tab.Home))
+    }
+
+    @Test
     fun waveformBytesMapToBoundedVisualizerBands() {
         val waveform = byteArrayOf(128.toByte(), 255.toByte(), 128.toByte(), 0, 128.toByte(), 220.toByte())
         val bands = waveform.toVisualizerBands(bandCount = 3)
@@ -401,6 +513,55 @@ class RecommendationTest {
 
         assertEquals(syntheticVisualizerBands(track), syntheticVisualizerBands(track))
         assertEquals(28, syntheticVisualizerBands(track).size)
+    }
+
+    @Test
+    fun dedupNormalizerStripsPunctuationAndNonVariantParentheticals() {
+        assertEquals("slipped away", normalizeDedupTitle("Slipped Away (Album Version)!"))
+        assertEquals("who knows", normalizeDedupTitle("Who Knows -"))
+    }
+
+    @Test
+    fun dedupNormalizerKeepsRealVariantSuffixesDistinct() {
+        assertEquals("slipped away live", normalizeDedupTitle("Slipped Away (Live)"))
+        assertEquals("slipped away remix", normalizeDedupTitle("Slipped Away (Remix)"))
+        assertEquals("slipped away acoustic", normalizeDedupTitle("Slipped Away (Acoustic)"))
+        assertEquals("slipped away instrumental", normalizeDedupTitle("Slipped Away (Instrumental)"))
+        assertEquals("slipped away demo", normalizeDedupTitle("Slipped Away (Demo)"))
+    }
+
+    @Test
+    fun dedupKeepsHighestBitrateAndRetainsAlternates() {
+        val low = sampleTrack("low", liked = false, plays = 1, completion = 0.4f)
+            .copy(title = "Slipped Away (Album Version)", artist = "Avril Lavigne", durationSec = 214, bitrate = 128000)
+        val high = low.copy(id = "high", title = "slipped away", durationSec = 216, bitrate = 320000)
+        val live = low.copy(id = "live", title = "Slipped Away (Live)", durationSec = 214, bitrate = 128000)
+
+        val deduped = deduplicateTracks(listOf(low, high, live))
+
+        assertEquals(2, deduped.size)
+        val canonical = deduped.first { it.title == "slipped away" }
+        assertEquals("high", canonical.id)
+        assertEquals(listOf("low"), canonical.alternates.map { it.id })
+        assertTrue(deduped.any { it.id == "live" })
+    }
+
+    @Test
+    fun metadataCleanupSeparatesInternalTagsAndSubtitleOmitsUnknowns() {
+        val metadata = cleanTrackMetadata(
+            title = "MID - Nobody's Home",
+            artist = "Unknown Artist",
+            album = "Under My Skin",
+            genres = listOf("Loud", "Rock", "Drive"),
+            fallbackPath = "/music/nobodys-home.flac"
+        )
+        val track = sampleTrack("metadata", liked = false, plays = 1, completion = 0.1f)
+            .copy(title = metadata.title, artist = metadata.artist, album = metadata.album, genre = metadata.genre, tags = metadata.tags, filename = metadata.filename)
+
+        assertEquals("Nobody's Home", metadata.title)
+        assertEquals("Rock", metadata.genre)
+        assertEquals(setOf("Loud", "Drive"), metadata.tags)
+        assertEquals("nobodys-home • Under My Skin • Rock", track.subtitle().text)
     }
 
     @Test

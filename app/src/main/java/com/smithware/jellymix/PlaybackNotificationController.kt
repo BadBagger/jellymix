@@ -47,7 +47,7 @@ class PlaybackNotificationController(private val context: Context) {
         return Notification.Builder(context, PLAYBACK_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentTitle(track.title)
-            .setContentText("${track.artist} - ${track.album}")
+            .setContentText(track.subtitle().text)
             .setSubText(state.queueTitle)
             .setContentIntent(activityIntent(requestCode = 0, action = null))
             .setVisibility(Notification.VISIBILITY_PUBLIC)

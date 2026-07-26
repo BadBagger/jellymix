@@ -334,7 +334,7 @@ class CarPlaybackService : MediaBrowserService() {
         Notification.Builder(this, CAR_PLAYBACK_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentTitle(track.title)
-            .setContentText("${track.artist} - ${track.album}")
+            .setContentText(track.subtitle().text)
             .setSubText("Android Auto")
             .setContentIntent(
                 android.app.PendingIntent.getActivity(

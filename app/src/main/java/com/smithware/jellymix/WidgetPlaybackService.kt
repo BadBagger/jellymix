@@ -208,7 +208,7 @@ class WidgetPlaybackService : Service() {
         val notification = Notification.Builder(this, WIDGET_PLAYBACK_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentTitle(track.title)
-            .setContentText("${track.artist} - ${track.album}")
+            .setContentText(track.subtitle().text)
             .setSubText("JellyMix widget control")
             .setOngoing(true)
             .setOnlyAlertOnce(true)

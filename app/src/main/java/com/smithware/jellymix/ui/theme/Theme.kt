@@ -2,10 +2,14 @@ package com.smithware.jellymix.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 
 private val Night = Color(0xFF101113)
 private val Ink = Color(0xFF171A21)
@@ -24,7 +28,7 @@ enum class AccentTheme(
     val secondary: Color,
     val tertiary: Color
 ) {
-    Jelly("Jelly", Color(0xFF00D9B5), Color(0xFFFF6B6B), Color(0xFF44546A)),
+    Jelly("Jelly", Color(0xFF1DE9B6), Color(0xFFFF6B6B), Color(0xFF44546A)),
     Ember("Ember", Color(0xFFFF7A1A), Color(0xFF0AA39A), Color(0xFF5F5A52)),
     Ocean("Ocean", Color(0xFF1D8FE1), Color(0xFF24C6A5), Color(0xFF3E5872)),
     Grape("Grape", Color(0xFF8B5CF6), Color(0xFFFFB703), Color(0xFF57427E)),
@@ -42,7 +46,7 @@ private fun lightColors(accentTheme: AccentTheme) = lightColorScheme(
     surface = Color.White,
     onSurface = Ink,
     surfaceVariant = Cloud,
-    onSurfaceVariant = Color(0xFF3D4552),
+    onSurfaceVariant = Color(0xFF2F3742),
     outline = Color(0xFF7B8493)
 )
 
@@ -57,13 +61,29 @@ private fun darkColors(accentTheme: AccentTheme) = darkColorScheme(
     surface = Color(0xFF181B22),
     onSurface = Paper,
     surfaceVariant = Color(0xFF252A33),
-    onSurfaceVariant = Color(0xFFD2D8E2),
+    onSurfaceVariant = Color(0xFFE0E5ED),
     outline = Color(0xFF88919F)
+)
+
+private val JellyMixTypography = Typography(
+    displayLarge = TextStyle(fontSize = 28.sp, lineHeight = 34.sp, fontWeight = FontWeight.Bold),
+    displayMedium = TextStyle(fontSize = 28.sp, lineHeight = 34.sp, fontWeight = FontWeight.Bold),
+    displaySmall = TextStyle(fontSize = 28.sp, lineHeight = 34.sp, fontWeight = FontWeight.Bold),
+    headlineSmall = TextStyle(fontSize = 28.sp, lineHeight = 34.sp, fontWeight = FontWeight.Bold),
+    titleLarge = TextStyle(fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.SemiBold),
+    titleMedium = TextStyle(fontSize = 17.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold),
+    titleSmall = TextStyle(fontSize = 17.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold),
+    bodyLarge = TextStyle(fontSize = 15.sp, lineHeight = 21.sp, fontWeight = FontWeight.Normal),
+    bodyMedium = TextStyle(fontSize = 15.sp, lineHeight = 21.sp, fontWeight = FontWeight.Normal),
+    bodySmall = TextStyle(fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Normal),
+    labelLarge = TextStyle(fontSize = 15.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold),
+    labelMedium = TextStyle(fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Normal),
+    labelSmall = TextStyle(fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Normal)
 )
 
 @Composable
 fun JellyMixTheme(
-    themeMode: ThemeMode = ThemeMode.System,
+    themeMode: ThemeMode = ThemeMode.Dark,
     accentTheme: AccentTheme = AccentTheme.Jelly,
     content: @Composable () -> Unit
 ) {
@@ -75,7 +95,7 @@ fun JellyMixTheme(
 
     MaterialTheme(
         colorScheme = if (darkTheme) darkColors(accentTheme) else lightColors(accentTheme),
-        typography = androidx.compose.material3.Typography(),
+        typography = JellyMixTypography,
         content = content
     )
 }

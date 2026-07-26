@@ -17,47 +17,54 @@ Done:
 - A JellyMix Compose theme file exists under `app/src/main/java/com/smithware/jellymix/ui/theme/Theme.kt`.
 - `MainActivity` is now under `com.smithware.jellymix`.
 - Old ManagerMeet starter Kotlin files were removed.
-- The first app shell includes connection inputs, Home, Vibe, Discover, Library, Playlists, player controls, seeded music data, and local recommendation ranking.
+- The app shell includes connection inputs, Home, Mixes, Discover, Library, player controls, seeded music data, and local recommendation ranking.
 - Jellyfin username/password auth, music-library fetch, playlist metadata fetch, playlist drill-in track fetch, primary image URLs, stream URL generation, and framework `MediaPlayer` playback paths are implemented.
+- Jellyfin library ingest now requests full audio metadata, deduplicates duplicate audio items by normalized title/artist/duration, keeps the highest-bitrate item canonical, and retains lower-bitrate copies as alternates for future track details.
 - Current-track prebuffering is implemented for saved sessions and paused queue changes so Jellyfin playback can start faster after tapping Play.
 - Server URL normalization and `/System/Info/Public` reachability check run before authentication.
 - Like/unlike is optimistic locally and attempts Jellyfin favorite sync for connected non-demo tracks.
 - Server URL, username, auth token, user id, likes, skips, and long-listen counts persist locally in SharedPreferences.
 - Search filters tracks by song, artist, album, genre, and mood.
+- Search, discovery, generated mixes, radio queues, vibe queues, Android Auto browse queues, and cached-library reads run through the same canonical deduplication layer so duplicate copies should not resurface downstream.
 - Discovery filter chips are actionable: Long listens, Liked, Low skips, Similar mood, and Rediscover each alter the Discover track list.
-- Generated mixes include longer Weekly Discovery, Heavy Rotation, Long Listen Mix, Quick Shuffle, Rediscover, Liked Radio, genre radio, and mood flow queues with artist rotation to avoid long one-artist blocks.
+- Generated mixes include Weekly Discovery, Heavy Rotation, Long Listen Mix, Quick Shuffle, Rediscover, Liked Radio, Library Radio, and Loud Flow. Each mix now uses a distinct primary signal, daily seeded tie-breaking, cross-mix overlap limits, max artist/album limits, and a defined small-library relaxation path.
 - Mixes, generated playlist cards, and the full library expose explicit Play and Shuffle controls.
 - Mixes and loaded playlists can start a queue. Skip is queue-aware. Player controls include shuffle and repeat queue toggles.
 - Playback completion advances through the active queue, marks long listens, and starts an autoplay radio queue when the queue ends instead of stopping or looping the same song.
 - Track radio builds a queue from the current song using mood, genre, artist, and local listening signals. Demo playback now pauses correctly.
 - Up Next and clear-queue controls exist. Clear session removes the saved Jellyfin token and returns the app to demo mode.
-- Home is now a music-first surface with current album art, curated mix shelves, stations/discovery, recently played, and heavy rotation. Connection/search/status panels no longer consume the first Home viewport.
-- Home also has mood chips, a speed-dial mix grid, full-cover discovery tiles, and mixed-for-you rails inspired by modern music app discovery surfaces.
+- Home is now a music-first surface with Continue Listening, a max-six speed-dial shortcut grid, recently played, and heavy rotation. Connection/search/status panels no longer consume the first Home viewport.
+- Mixes is the single owner for generated mixes, vibe playlists, and the user's Jellyfin playlists. It replaces the old separate Vibe and Playlists tabs with a Mixes/Vibes/Yours segmented control.
 - Jellyfin track or album primary image artwork is used across Home rails, mix shelves, Now Playing, track rows, and the mini player. Generated gradient covers are always drawn underneath real images so missing/broken Jellyfin art does not render as an empty slab.
+- Track subtitles use a single `artist • album • genre` model across phone rows, Android Auto browse, notifications, and widget foreground playback. Unknown artist/album placeholders and internal labels such as Loud, Drive, Library, and Crossover are not rendered as genres.
 - The last loaded Jellyfin track and playlist lists are cached locally in SharedPreferences. Saved-session launches render the cached library immediately and refresh Jellyfin in the background, so startup is not blocked before playback is usable.
 - Tapping the mini player opens a cleaner Now Playing page centered on a square album-art/visualizer stage, transport controls, DJ mode, queue context, autoplay status, and more mixes. Tapping the square stage toggles between album art and the visualizer.
 - Jarvis DJ is implemented as a local conversational radio coordinator. It accepts free-form prompts and quick suggestions, infers Guest DJ modes, rebuilds the queue, persists the active mode/current queue/current track, and explains upcoming track reasons without sending listening data to a cloud service.
 - Guest DJ modes include Flow, Familiar, Discovery, Deep cuts, Artist focus, High energy, and Chill. Now Playing includes DJ mode controls and an autoplay preview with queue reasons.
-- Vibe tab is implemented for emotion/activity playlist search. It supports preset vibes like Chill, Hype, Sad, Angry, Focus, Late Night, Happy, Nostalgic, Workout, and Rainy, and custom metadata searches that build playable vibe mixes.
+- Vibes live inside the Mixes tab for emotion/activity playlist search. Preset vibes now qualify tracks by cached audio-feature regions for energy, BPM, centroid/brightness, dynamics, vocal presence, tempo stability, and valence proxy instead of padding every vibe from one popularity sort. Undersized vibe regions show a subtle "not enough tracks yet" state.
+- Discover is now a Jarvis DJ-only surface with prompt input, Familiar/Discovery/Deep mode chips, and the latest DJ queue/results instead of a large generic track wall.
+- Library owns browsing and search with Artists/Albums/Tracks/Genres segmentation plus saved discovery filters.
+- Up Next is no longer in a static tab; it is reachable from the mini player queue label and Now Playing as a bottom sheet with queue counter, Clear, drag-to-reorder, swipe-to-remove, and distinct Play next/Add to queue suggestion actions.
 - Android Auto media integration is implemented with a foreground platform `MediaBrowserService`, `MediaSession`, and Car App Library media-template entry point for hosts that try to launch a car-safe activity. It exposes Curated, Vibes, Jarvis DJ, and Library browse roots, playable track queues, transport controls, Jellyfin stream playback, local play-history updates, autoplay continuation when a car-started queue ends, local media output attributes, content-style browse hints, and Android media audio-focus handling. The phone activity is intentionally not marked as drive-optimized; Android Auto should use the media browser/template surface rather than opening JellyMix's phone UI while driving.
 - Apple CarPlay is documented as a separate iOS app requirement because this Android app cannot directly integrate with CarPlay or request Apple's CarPlay entitlement.
 - Recently played and local play counts persist on-device and influence ranking.
 - Custom theme options exist in the connection/settings card: System, Light, and Dark mode plus Jelly, Ember, Ocean, Grape, and Mono accent palettes. The selections persist locally.
+- JellyMix now defaults to dark theme with a teal Jelly accent, uses a defined 28/20/17/15/13 typography scale, stronger section/card hierarchy, low-emphasis secondary actions, generated gradient mix covers, initials-based missing-art fallbacks, denser adaptive track rows, and larger accessible row icon targets.
 - The Now Playing visualizer has a decoupled audio-analysis layer and a GPU feedback-tunnel renderer. Live Jellyfin playback uses Android audio-session FFT capture after `RECORD_AUDIO` permission and exposes bands, bass, mid, treble, RMS, beat, and spectral-centroid signals. Demo mode or unavailable capture falls back to a calm track-shaped ambient frame instead of freezing. The square album-art slot toggles to the visualizer, and a fullscreen visualizer overlay is available from that stage.
 - Now Playing hides the mini player while open, removes the low-value song-detail card, and uses larger driving-friendly transport controls: 60dp secondary buttons, a 76dp primary play/pause button, and clear active states for shuffle, like, and repeat.
 - Android home-screen widget is included. It reads the local current-track cache, shows title/artist/Jellyfin context, keeps the widget background as an app-open target, and routes play/pause plus skip taps to private foreground-service playback commands so button taps do not open `MainActivity`.
 - Lock-screen/media notification controls are included. The app owns a playback `MediaSession`, posts a public media-style notification with Previous, Play/Pause, Skip, and Stop actions, requests Android 13+ notification permission when playback starts, and routes notification action buttons through foreground-safe private playback commands instead of opening `MainActivity`.
 - The Jellyfin connection card is onboarding-style: it hides after the library actually loads and reappears only when there is no saved session or the saved session fails to load the library.
-- The mini player was reduced to a compact control surface after phone screenshots showed the previous player consumed too much screen space.
-- Recommendation, local play boost, generated mix, vibe playlist search/ranking, Jarvis DJ prompt/mode handling, autoplay queue, search, discovery filter, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, cached library parsing, image tag detection, theme preference parsing, visualizer band tests, and audio-analysis tests exist in `app/src/test/java/com/smithware/jellymix/RecommendationTest.kt`.
-- `.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug` passed on July 25, 2026 after the GPU feedback-tunnel visualizer pass.
+- The mini player is a compact expandable playback bar with title marquee, artist subtitle, queue label, previous/play-next controls only, swipe up/down to expand/dismiss, swipe left/right to skip previous/next, and a thin bottom-edge progress line. Shuffle, repeat, and like live in expanded Now Playing.
+- Recommendation, local play boost, generated mix differentiation/diversity, vibe feature-region classification, tab migration, Jarvis DJ prompt/mode handling, autoplay queue, search, discovery filter, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, cached library parsing, image tag detection, theme preference parsing, visualizer band tests, audio-analysis tests, and dedup/metadata cleanup tests exist in `app/src/test/java/com/smithware/jellymix/RecommendationTest.kt`.
+- `.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug` passed on July 25, 2026 after the visual hierarchy pass.
 
 Not done:
 
-- Emulator install and launch verification passed on `Smithware_Test_Device` for the debug build.
+- Emulator install and launch verification passed on `emulator-5554` for the debug build after the visual hierarchy pass.
 - No real Jellyfin server login/playback test has been run yet.
 - Live visualizer capture has not been verified on a real device/server.
-- Exact PCM FFT with a Hann window is not implemented yet; the current live path uses Android's session `Visualizer` FFT behind the new analyzer API. Migrating playback to a PCM-accessible engine can replace the analyzer input later.
+- Exact PCM library scanning for BPM/RMS/centroid/dynamic range is not implemented yet; the current recommendation feature cache uses deterministic metadata-derived feature inference. Migrating playback/library scanning to a PCM-accessible engine can replace the inference source later without changing the mix/vibe selectors.
 - Lock-screen notification controls are implemented for the main app playback path. Real-device behavior still needs phone-side verification with a Jellyfin stream.
 
 Published:

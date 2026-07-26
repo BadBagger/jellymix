@@ -36,11 +36,12 @@ internal fun buildCarBrowseEntries(
     djMode: GuestDjMode = GuestDjMode.Flow,
     seed: Track = tracks.firstOrNull() ?: sampleTracks.first()
 ): List<CarBrowseEntry> {
-    val library = tracks.ifEmpty { sampleTracks }
+    val library = deduplicateTracks(tracks.ifEmpty { sampleTracks })
     val ranked = library.rankedForCar(liked, longListens, skips, localPlays)
     val recentTracks = recentlyPlayedIds.mapNotNull { id -> library.firstOrNull { it.id == id } }
-    val mixes = buildMixes(ranked, liked, longListens, skips, localPlays, recentTracks)
-    val vibes = buildVibeMixes(library, "", liked, longListens, localPlays)
+    val features = library.associate { it.id to inferAudioFeatures(it) }
+    val mixes = buildMixes(ranked, liked, longListens, skips, localPlays, recentTracks, features)
+    val vibes = buildVibeMixes(library, "", liked, longListens, localPlays, features)
     val jarvisQueue = buildGuestDjQueue(djMode, seed, library, liked, longListens, skips, localPlays, recentlyPlayedIds)
 
     return when {
@@ -75,14 +76,15 @@ internal fun queueForCarMediaId(
     djMode: GuestDjMode = GuestDjMode.Flow,
     seed: Track = tracks.firstOrNull() ?: sampleTracks.first()
 ): List<Track> {
-    val library = tracks.ifEmpty { sampleTracks }
+    val library = deduplicateTracks(tracks.ifEmpty { sampleTracks })
     val directTrack = mediaId.fromCarTrackId()?.let { id -> library.firstOrNull { it.id == id } }
     if (directTrack != null) return buildTrackRadio(directTrack, library, liked, longListens, skips, localPlays)
 
     val ranked = library.rankedForCar(liked, longListens, skips, localPlays)
     val recentTracks = recentlyPlayedIds.mapNotNull { id -> library.firstOrNull { it.id == id } }
-    val mixes = buildMixes(ranked, liked, longListens, skips, localPlays, recentTracks)
-    val vibes = buildVibeMixes(library, "", liked, longListens, localPlays)
+    val features = library.associate { it.id to inferAudioFeatures(it) }
+    val mixes = buildMixes(ranked, liked, longListens, skips, localPlays, recentTracks, features)
+    val vibes = buildVibeMixes(library, "", liked, longListens, localPlays, features)
     return mixes.firstOrNull { carMixId(it.name) == mediaId }?.tracks
         ?: vibes.firstOrNull { carVibeId(it.name) == mediaId }?.tracks
         ?: buildGuestDjQueue(djMode, seed, library, liked, longListens, skips, localPlays, recentlyPlayedIds)
@@ -94,7 +96,7 @@ private fun List<Track>.rankedForCar(
     skips: Map<String, Int>,
     localPlays: Map<String, Int>
 ): List<Track> =
-    sortedByDescending { track ->
+    deduplicateTracks(this).sortedByDescending { track ->
         recommendationScore(
             track = track,
             liked = liked[track.id] == true || track.liked,
@@ -109,7 +111,7 @@ private fun List<Track>.toCarTrackEntries(): List<CarBrowseEntry> =
         CarBrowseEntry(
             id = carTrackId(track.id),
             title = track.title,
-            subtitle = "${track.artist} - ${track.album}",
+            subtitle = track.subtitle().text,
             playable = true
         )
     }

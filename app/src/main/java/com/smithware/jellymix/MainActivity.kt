@@ -24,12 +24,16 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -40,6 +44,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -60,7 +65,9 @@ import androidx.compose.material.icons.filled.Recommend
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -70,12 +77,18 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -91,6 +104,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -110,7 +124,9 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.net.SocketTimeoutException
 import java.net.URL
+import java.time.LocalDate
 import kotlin.math.abs
+import kotlin.math.absoluteValue
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlinx.coroutines.Dispatchers
@@ -212,6 +228,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             val cachedLibrary = readCachedLibrary()
             val hasSavedSession = token.isNotBlank() && userId.isNotBlank()
             val initialTracks = if (hasSavedSession) cachedLibrary.tracks.ifEmpty { sampleTracks } else sampleTracks
+            val initialFeatures = readAudioFeatureCache(initialTracks)
             val savedQueueIds = prefs.getString("queueIds", null)?.split(",")?.filter { it.isNotBlank() }.orEmpty()
             val savedQueue = savedQueueIds.mapNotNull { id -> initialTracks.firstOrNull { it.id == id } }
             val savedCurrentTrackId = prefs.getString("currentTrackId", null)
@@ -224,9 +241,14 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 username = prefs.getString("username", "").orEmpty(),
                 token = token,
                 userId = userId,
-                themeMode = prefs.getString("themeMode", null).enumValueOrDefault(ThemeMode.System),
+                themeMode = prefs.getString("themeMode", null).enumValueOrDefault(ThemeMode.Dark),
                 accentTheme = prefs.getString("accentTheme", null).enumValueOrDefault(AccentTheme.Jelly),
+                selectedTab = prefs.getString("selectedTab", null).toTabOrDefault(Tab.Home),
+                mixesSegment = prefs.getString("mixesSegment", null).enumValueOrDefault(MixesSegment.Mixes),
+                libraryBrowseMode = prefs.getString("libraryBrowseMode", null).enumValueOrDefault(LibraryBrowseMode.Tracks),
                 tracks = initialTracks,
+                rawTrackCount = prefs.getInt("rawTrackCount", initialTracks.size),
+                audioFeatures = initialFeatures,
                 currentTrack = initialCurrent,
                 queue = savedQueue,
                 queueIndex = savedQueue.indexOfFirst { it.id == initialCurrent.id }.coerceAtLeast(0),
@@ -274,6 +296,21 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
 
     fun setVibeQuery(value: String) {
         state = state.copy(vibeQuery = value)
+    }
+
+    fun setSelectedTab(value: Tab) {
+        state = state.copy(selectedTab = value)
+        prefs.edit().putString("selectedTab", value.name).apply()
+    }
+
+    fun setMixesSegment(value: MixesSegment) {
+        state = state.copy(mixesSegment = value)
+        prefs.edit().putString("mixesSegment", value.name).apply()
+    }
+
+    fun setLibraryBrowseMode(value: LibraryBrowseMode) {
+        state = state.copy(libraryBrowseMode = value)
+        prefs.edit().putString("libraryBrowseMode", value.name).apply()
     }
 
     fun setDiscoveryFilter(value: DiscoveryFilter) {
@@ -370,6 +407,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             }.onSuccess { library ->
                 val remoteTracks = library.tracks
                 val tracks = remoteTracks.ifEmpty { sampleTracks }
+                val features = readAudioFeatureCache(tracks)
                 val mergedLiked = tracks.associate { it.id to (state.liked[it.id] ?: it.liked) }
                 val mergedSkips = tracks.associate { it.id to (state.skips[it.id] ?: it.skipped) }
                 val mergedLong = tracks.associate { it.id to (state.longListens[it.id] ?: 0) }
@@ -378,6 +416,8 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                     isLoading = false,
                     libraryLoaded = true,
                     tracks = tracks,
+                    rawTrackCount = library.rawTrackCount.takeIf { it > 0 } ?: tracks.sumOf { 1 + it.alternates.size },
+                    audioFeatures = features,
                     currentTrack = tracks.firstOrNull() ?: state.currentTrack,
                     liked = mergedLiked,
                     skips = mergedSkips,
@@ -387,9 +427,10 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                     jellyfinPlaylists = library.playlists,
                     selectedPlaylist = null,
                     selectedPlaylistTracks = emptyList(),
-                    status = "Connected. Loaded ${tracks.size} tracks and ${library.playlists.size} playlists."
+                    status = "Connected. Loaded ${tracks.size} deduped tracks from ${library.rawTrackCount.takeIf { it > 0 } ?: tracks.size} library items and ${library.playlists.size} playlists."
                 )
                 persistCachedLibrary(tracks, library.playlists)
+                persistAudioFeatureCache(features)
                 persistSignals()
             }.onFailure { error ->
                 state = state.copy(
@@ -415,7 +456,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun startQueue(title: String, tracks: List<Track>) {
-        val playableTracks = tracks.distinctBy { it.id }
+        val playableTracks = deduplicateTracks(tracks)
         if (playableTracks.isEmpty()) {
             state = state.copy(status = "No tracks available for $title.")
             return
@@ -433,7 +474,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun startShuffledQueue(title: String, tracks: List<Track>) {
-        val playableTracks = tracks.distinctBy { it.id }
+        val playableTracks = deduplicateTracks(tracks)
         if (playableTracks.isEmpty()) {
             state = state.copy(status = "No tracks available for $title.")
             return
@@ -469,18 +510,19 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                     client.fetchPlaylistTracks(state.serverUrl, state.userId, state.token, playlist.id)
                 }
             }.onSuccess { playlistTracks ->
-                val mergedLiked = (state.tracks + playlistTracks).associate { it.id to (state.liked[it.id] ?: it.liked) }
-                val mergedSkips = (state.tracks + playlistTracks).associate { it.id to (state.skips[it.id] ?: it.skipped) }
-                val mergedLong = (state.tracks + playlistTracks).associate { it.id to (state.longListens[it.id] ?: 0) }
-                val mergedPlays = (state.tracks + playlistTracks).associate { it.id to (state.localPlays[it.id] ?: 0) }
+                val canonicalPlaylistTracks = deduplicateTracks(playlistTracks)
+                val mergedLiked = (state.tracks + canonicalPlaylistTracks).associate { it.id to (state.liked[it.id] ?: it.liked) }
+                val mergedSkips = (state.tracks + canonicalPlaylistTracks).associate { it.id to (state.skips[it.id] ?: it.skipped) }
+                val mergedLong = (state.tracks + canonicalPlaylistTracks).associate { it.id to (state.longListens[it.id] ?: 0) }
+                val mergedPlays = (state.tracks + canonicalPlaylistTracks).associate { it.id to (state.localPlays[it.id] ?: 0) }
                 state = state.copy(
                     isLoading = false,
-                    selectedPlaylistTracks = playlistTracks,
+                    selectedPlaylistTracks = canonicalPlaylistTracks,
                     liked = mergedLiked,
                     skips = mergedSkips,
                     longListens = mergedLong,
                     localPlays = mergedPlays,
-                    status = "Loaded ${playlistTracks.size} tracks from ${playlist.name}."
+                    status = "Loaded ${canonicalPlaylistTracks.size} deduped tracks from ${playlistTracks.size} playlist items."
                 )
                 persistSignals()
             }.onFailure { error ->
@@ -679,6 +721,63 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         persistPlaybackState()
     }
 
+    fun moveQueueItem(fromIndex: Int, toIndex: Int) {
+        val queue = state.queue.toMutableList()
+        if (fromIndex !in queue.indices || toIndex !in queue.indices || fromIndex == toIndex) return
+        val moving = queue.removeAt(fromIndex)
+        queue.add(toIndex, moving)
+        val currentIndex = queue.indexOfFirst { it.id == state.currentTrack.id }.coerceAtLeast(0)
+        state = state.copy(
+            queue = queue,
+            queueIndex = currentIndex,
+            status = "Moved ${moving.title} in the queue."
+        )
+        persistPlaybackState()
+    }
+
+    fun removeQueueItem(index: Int) {
+        val queue = state.queue.toMutableList()
+        if (index !in queue.indices) return
+        val removed = queue.removeAt(index)
+        val wasCurrent = removed.id == state.currentTrack.id
+        val nextCurrent = if (removed.id == state.currentTrack.id) queue.getOrNull(index.coerceAtMost(queue.lastIndex)) ?: state.currentTrack else state.currentTrack
+        val currentIndex = queue.indexOfFirst { it.id == nextCurrent.id }.coerceAtLeast(0)
+        state = state.copy(
+            currentTrack = nextCurrent,
+            queue = queue,
+            queueIndex = currentIndex,
+            status = "Removed ${removed.title} from the queue."
+        )
+        persistPlaybackState()
+        if (wasCurrent && state.isPlaying) playCurrentTrack() else preloadCurrentTrack()
+    }
+
+    fun playNext(track: Track) {
+        val baseQueue = state.queue.ifEmpty { listOf(state.currentTrack) }
+        val insertIndex = (state.queueIndex + 1).coerceIn(1, baseQueue.size)
+        val queue = baseQueue.filterNot { it.id == track.id }.toMutableList()
+        queue.add(insertIndex.coerceAtMost(queue.size), track)
+        state = state.copy(
+            queue = queue,
+            queueIndex = queue.indexOfFirst { it.id == state.currentTrack.id }.coerceAtLeast(0),
+            queueTitle = state.queueTitle.takeIf { state.queue.isNotEmpty() } ?: "Manual queue",
+            status = "${track.title} will play next."
+        )
+        persistPlaybackState()
+        preloadCurrentTrack()
+    }
+
+    fun addToQueue(track: Track) {
+        val queue = (state.queue.ifEmpty { listOf(state.currentTrack) } + track).distinctBy { it.id }
+        state = state.copy(
+            queue = queue,
+            queueIndex = queue.indexOfFirst { it.id == state.currentTrack.id }.coerceAtLeast(0),
+            queueTitle = state.queueTitle.takeIf { state.queue.isNotEmpty() } ?: "Manual queue",
+            status = "Added ${track.title} to the queue."
+        )
+        persistPlaybackState()
+    }
+
     fun clearSession() {
         player?.release()
         releasePreloadedPlayer()
@@ -701,6 +800,8 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             userId = "",
             password = "",
             tracks = sampleTracks,
+            rawTrackCount = sampleTracks.size,
+            audioFeatures = sampleTracks.associate { it.id to inferAudioFeatures(it) },
             currentTrack = sampleTracks.first(),
             queue = emptyList(),
             queueIndex = 0,
@@ -1067,14 +1168,28 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         prefs.edit()
             .putString("cachedTracks", tracks.toTrackCacheString())
             .putString("cachedPlaylists", playlists.toPlaylistCacheString())
+            .putInt("rawTrackCount", tracks.sumOf { 1 + it.alternates.size })
             .apply()
     }
 
     private fun readCachedLibrary(): JellyfinLibraryLoad =
-        JellyfinLibraryLoad(
-            tracks = prefs.getString("cachedTracks", null)?.toTrackList().orEmpty(),
-            playlists = prefs.getString("cachedPlaylists", null)?.toPlaylistList().orEmpty()
-        )
+        prefs.getString("cachedTracks", null)?.toTrackList().orEmpty().let { cachedTracks ->
+            val dedupedTracks = deduplicateTracks(cachedTracks)
+            JellyfinLibraryLoad(
+                tracks = dedupedTracks,
+                playlists = prefs.getString("cachedPlaylists", null)?.toPlaylistList().orEmpty(),
+                rawTrackCount = prefs.getInt("rawTrackCount", cachedTracks.size)
+            )
+        }
+
+    private fun readAudioFeatureCache(tracks: List<Track>): Map<String, TrackAudioFeatures> {
+        val cached = prefs.getString("audioFeatures", null)?.toAudioFeatureMap().orEmpty()
+        return deduplicateTracks(tracks).associate { track -> track.id to (cached[track.id] ?: inferAudioFeatures(track)) }
+    }
+
+    private fun persistAudioFeatureCache(features: Map<String, TrackAudioFeatures>) {
+        prefs.edit().putString("audioFeatures", features.toAudioFeatureCacheString()).apply()
+    }
 
     private fun recordPlayStart(track: Track) {
         val recent = listOf(track.id) + state.recentTrackIds.filterNot { it == track.id }
@@ -1128,42 +1243,52 @@ private class JellyfinClient {
 
         val url = buildString {
             append("$serverUrl/Users/$userId/Items?Recursive=true&IncludeItemTypes=Audio")
-            append("&StartIndex=0&Limit=250")
-            append("&Fields=Genres,UserData,RunTimeTicks,Album,Artists,ImageTags,AlbumId,AlbumPrimaryImageTag")
+            append("&StartIndex=0&Limit=10000")
+            append("&Fields=Genres,UserData,RunTimeTicks,Album,Artists,ImageTags,AlbumId,AlbumPrimaryImageTag,Bitrate,MediaSources,Path")
             append("&SortBy=DatePlayed,SortName&SortOrder=Descending")
             if (!musicLibraryId.isNullOrBlank()) append("&ParentId=${Uri.encode(musicLibraryId)}")
         }
         val items = requestJson(url, "GET", null, token).optJSONArray("Items") ?: return emptyList()
-        return items.toTracks(serverUrl, token)
+        return deduplicateTracks(items.toTracks(serverUrl, token))
     }
 
     fun fetchPlaylists(serverUrl: String, userId: String, token: String): List<JellyfinPlaylist> {
-        val url = "$serverUrl/Users/$userId/Items?Recursive=true&IncludeItemTypes=Playlist&SortBy=SortName"
+        val url = "$serverUrl/Users/$userId/Items?Recursive=true&IncludeItemTypes=Playlist&Fields=ChildCount,ItemCounts,ImageTags&SortBy=SortName"
         val items = requestJson(url, "GET", null, token).optJSONArray("Items") ?: return emptyList()
         return (0 until items.length()).mapNotNull { index ->
             val item = items.getJSONObject(index)
             val id = item.optString("Id").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val fetchedCount = runCatching {
+                requestJson("$serverUrl/Playlists/${Uri.encode(id)}/Items?UserId=${Uri.encode(userId)}&Limit=1", "GET", null, token)
+                    .optInt("TotalRecordCount", 0)
+            }.getOrDefault(0)
             JellyfinPlaylist(
                 id = id,
                 name = item.optString("Name", "Playlist"),
-                childCount = item.optInt("ChildCount", 0),
+                childCount = listOf(
+                    item.optInt("ChildCount", 0),
+                    item.optInt("RecursiveItemCount", 0),
+                    item.optInt("SongCount", 0),
+                    item.optJSONObject("ItemCounts")?.optInt("SongCount", 0) ?: 0,
+                    fetchedCount
+                ).maxOrNull() ?: 0,
                 imageUrl = imageUrlOrNull(serverUrl, id, token, item.hasPrimaryImage())
             )
         }
     }
 
     fun fetchPlaylistTracks(serverUrl: String, userId: String, token: String, playlistId: String): List<Track> {
-        val playlistUrl = "$serverUrl/Playlists/${Uri.encode(playlistId)}/Items?UserId=${Uri.encode(userId)}&Fields=Genres,UserData,RunTimeTicks,Album,Artists,ImageTags,AlbumId,AlbumPrimaryImageTag"
+        val playlistUrl = "$serverUrl/Playlists/${Uri.encode(playlistId)}/Items?UserId=${Uri.encode(userId)}&Fields=Genres,UserData,RunTimeTicks,Album,Artists,ImageTags,AlbumId,AlbumPrimaryImageTag,Bitrate,MediaSources,Path"
         val items = runCatching {
             requestJson(playlistUrl, "GET", null, token).optJSONArray("Items")
         }.getOrNull()
-        if (items != null) return items.toTracks(serverUrl, token)
+        if (items != null) return deduplicateTracks(items.toTracks(serverUrl, token))
 
-        val fallbackUrl = "$serverUrl/Users/$userId/Items?ParentId=${Uri.encode(playlistId)}&Recursive=true&IncludeItemTypes=Audio&Fields=Genres,UserData,RunTimeTicks,Album,Artists,ImageTags,AlbumId,AlbumPrimaryImageTag"
-        return requestJson(fallbackUrl, "GET", null, token)
+        val fallbackUrl = "$serverUrl/Users/$userId/Items?ParentId=${Uri.encode(playlistId)}&Recursive=true&IncludeItemTypes=Audio&Fields=Genres,UserData,RunTimeTicks,Album,Artists,ImageTags,AlbumId,AlbumPrimaryImageTag,Bitrate,MediaSources,Path"
+        return deduplicateTracks(requestJson(fallbackUrl, "GET", null, token)
             .optJSONArray("Items")
             ?.toTracks(serverUrl, token)
-            .orEmpty()
+            .orEmpty())
     }
 
     fun streamUrl(serverUrl: String, itemId: String, token: String): String =
@@ -1216,9 +1341,16 @@ private class JellyfinClient {
             val id = item.optString("Id").takeIf { it.isNotBlank() } ?: return@mapNotNull null
             val userData = item.optJSONObject("UserData")
             val artists = item.optJSONArray("Artists")
-            val artist = if (artists != null && artists.length() > 0) artists.optString(0) else item.optString("AlbumArtist", "Unknown Artist")
+            val artist = if (artists != null && artists.length() > 0) artists.optString(0) else item.optString("AlbumArtist")
             val genres = item.optJSONArray("Genres")
-            val genre = if (genres != null && genres.length() > 0) genres.optString(0) else "Library"
+            val genreValues = (0 until (genres?.length() ?: 0)).mapNotNull { genreIndex -> genres?.optString(genreIndex)?.takeIf { it.isNotBlank() } }
+            val metadata = cleanTrackMetadata(
+                title = item.optString("Name"),
+                artist = artist,
+                album = item.optString("Album"),
+                genres = genreValues,
+                fallbackPath = item.optString("Path")
+            )
             val ticks = item.optLong("RunTimeTicks", 0L)
             val albumId = item.optString("AlbumId").takeIf { it.isNotBlank() }
             val imageItemId = when {
@@ -1226,19 +1358,26 @@ private class JellyfinClient {
                 !albumId.isNullOrBlank() && item.optString("AlbumPrimaryImageTag").isNotBlank() -> albumId
                 else -> null
             }
+            val mediaSources = item.optJSONArray("MediaSources")
+            val sourceBitrate = (0 until (mediaSources?.length() ?: 0)).maxOfOrNull { sourceIndex ->
+                mediaSources?.optJSONObject(sourceIndex)?.optInt("Bitrate", 0) ?: 0
+            } ?: 0
             Track(
                 id = id,
-                title = item.optString("Name", "Untitled"),
-                artist = artist.ifBlank { "Unknown Artist" },
-                album = item.optString("Album", "Unknown Album").ifBlank { "Unknown Album" },
-                genre = genre.ifBlank { "Library" },
-                mood = moodFromGenre(genre),
+                title = metadata.title,
+                artist = metadata.artist,
+                album = metadata.album,
+                genre = metadata.genre,
+                mood = moodFromGenre(metadata.genre, metadata.tags),
                 durationSec = (ticks / 10_000_000L).toInt().coerceAtLeast(1),
                 plays = userData?.optInt("PlayCount", 0) ?: 0,
                 completion = ((userData?.optDouble("PlayedPercentage", 0.0) ?: 0.0) / 100.0).toFloat().coerceIn(0f, 1f),
                 skipped = 0,
                 liked = userData?.optBoolean("IsFavorite", false) ?: false,
-                imageUrl = imageItemId?.let { imageUrl(serverUrl, it, token) }
+                imageUrl = imageItemId?.let { imageUrl(serverUrl, it, token) },
+                bitrate = maxOf(item.optInt("Bitrate", 0), sourceBitrate),
+                tags = metadata.tags,
+                filename = metadata.filename
             )
         }
 }
@@ -1249,10 +1388,14 @@ private fun JellyMixApp(
     viewModel: JellyMixViewModel,
     onRequestVisualizerPermission: () -> Unit
 ) {
-    var selectedTab by androidx.compose.runtime.remember { mutableStateOf(Tab.Home) }
     var showNowPlaying by remember { mutableStateOf(false) }
+    var showQueueSheet by remember { mutableStateOf(false) }
+    var showMiniPlayer by remember { mutableStateOf(true) }
     val state = viewModel.state
-    val rankedTracks = state.rankedTracks()
+    LaunchedEffect(state.currentTrack.id) {
+        showMiniPlayer = true
+    }
+    val rankedTracks = deduplicateTracks(state.rankedTracks())
     val visibleTracks = filterTracks(rankedTracks, state.searchQuery)
     val discoveryTracks = discoveryTracks(
         tracks = visibleTracks,
@@ -1263,7 +1406,16 @@ private fun JellyMixApp(
         currentTrack = state.currentTrack
     )
     val recentTracks = state.recentTracks()
-    val mixes = buildMixes(rankedTracks, state.liked, state.longListens, state.skips, state.localPlays, recentTracks)
+    val vibeMixes = buildVibeMixes(deduplicateTracks(state.tracks), state.vibeQuery, state.liked, state.longListens, state.localPlays, state.audioFeatures)
+    val mixes = buildMixes(
+        rankedTracks,
+        state.liked,
+        state.longListens,
+        state.skips,
+        state.localPlays,
+        recentTracks,
+        state.audioFeatures
+    )
 
     Scaffold(
         topBar = {
@@ -1273,10 +1425,10 @@ private fun JellyMixApp(
             NavigationBar {
                 Tab.entries.forEach { tab ->
                     NavigationBarItem(
-                        selected = selectedTab == tab && !showNowPlaying,
+                        selected = state.selectedTab == tab && !showNowPlaying,
                         onClick = {
                             showNowPlaying = false
-                            selectedTab = tab
+                            viewModel.setSelectedTab(tab)
                         },
                         icon = { Icon(tab.icon, contentDescription = tab.label) },
                         label = { Text(tab.label) }
@@ -1331,13 +1483,12 @@ private fun JellyMixApp(
                             onQueueSelected = viewModel::startQueue,
                             onShuffledQueueSelected = viewModel::startShuffledQueue,
                             onClearQueue = viewModel::clearQueue,
+                            onOpenQueue = { showQueueSheet = true },
                             onTrackSelected = viewModel::selectTrack
                         )
                     }
-                } else when (selectedTab) {
+                } else when (state.selectedTab) {
                     Tab.Home -> {
-                        item { HomeMoodChips(state.vibeQuery, viewModel::setVibeQuery) }
-                        item { SpeedDialGrid(mixes.take(8), viewModel::startQueue) }
                         item {
                             HomeNowCard(
                                 state = state,
@@ -1346,30 +1497,56 @@ private fun JellyMixApp(
                                 onStartRadio = viewModel::startRadioFromCurrent
                             )
                         }
-                        item { MixRail("Mixed for you", mixes.take(4), viewModel::startQueue, viewModel::startShuffledQueue, viewModel::selectTrack) }
-                        item { MixRail("Fresh finds, old favorites", mixes.drop(4), viewModel::startQueue, viewModel::startShuffledQueue, viewModel::selectTrack) }
+                        item { SpeedDialGrid(homeSpeedDialMixes(mixes), viewModel::startQueue) }
                         if (recentTracks.isNotEmpty()) {
                             item { TrackRail("Recently played", recentTracks.take(10), viewModel::selectTrack) }
                         }
                         item { TrackRail("Heavy rotation", visibleTracks.take(10), viewModel::selectTrack) }
                     }
-                    Tab.Vibe -> {
-                        item {
-                            VibeSearchCard(
-                                query = state.vibeQuery,
-                                onQueryChange = viewModel::setVibeQuery,
-                                resultCount = buildVibeMixes(state.tracks, state.vibeQuery, state.liked, state.longListens, state.localPlays).size
-                            )
-                        }
-                        item { VibeChipRow(state.vibeQuery, viewModel::setVibeQuery) }
-                        items(buildVibeMixes(state.tracks, state.vibeQuery, state.liked, state.longListens, state.localPlays)) { vibe ->
-                            VibeMixCard(
-                                mix = vibe,
-                                liked = state.liked,
-                                onQueueSelected = viewModel::startQueue,
-                                onShuffledQueueSelected = viewModel::startShuffledQueue,
-                                onTrackSelected = viewModel::selectTrack
-                            )
+                    Tab.Mixes -> {
+                        item { MixesSegmentControl(state.mixesSegment, viewModel::setMixesSegment) }
+                        when (state.mixesSegment) {
+                            MixesSegment.Mixes -> items(mixes) { mix ->
+                                PlaylistCard(mix, state.liked, viewModel::startQueue, viewModel::startShuffledQueue, viewModel::selectTrack)
+                            }
+                            MixesSegment.Vibes -> {
+                                item {
+                                    VibeSearchCard(
+                                        query = state.vibeQuery,
+                                        onQueryChange = viewModel::setVibeQuery,
+                                        resultCount = vibeMixes.size
+                                    )
+                                }
+                                item { VibeChipRow(state.vibeQuery, viewModel::setVibeQuery) }
+                                items(vibeMixes) { vibe ->
+                                    VibeMixCard(
+                                        mix = vibe,
+                                        liked = state.liked,
+                                        onQueueSelected = viewModel::startQueue,
+                                        onShuffledQueueSelected = viewModel::startShuffledQueue,
+                                        onTrackSelected = viewModel::selectTrack
+                                    )
+                                }
+                            }
+                            MixesSegment.Yours -> {
+                                if (state.jellyfinPlaylists.isNotEmpty()) {
+                                    item { JellyfinPlaylistRail(state.jellyfinPlaylists, viewModel::openPlaylist) }
+                                } else {
+                                    item { EmptyState("No Jellyfin playlists", "Server playlists and user-created mixes will appear here.") }
+                                }
+                                state.selectedPlaylist?.let { playlist ->
+                                    item {
+                                        SelectedPlaylistSection(
+                                            playlist = playlist,
+                                            tracks = state.selectedPlaylistTracks,
+                                            liked = state.liked,
+                                            onQueueSelected = { viewModel.startQueue(playlist.name, state.selectedPlaylistTracks) },
+                                            onTrackSelected = viewModel::selectTrack
+                                        )
+                                    }
+                                }
+                                item { EmptyState("User-created mixes", "Saved personal mixes can live here when creation is added.") }
+                            }
                         }
                     }
                     Tab.Discover -> {
@@ -1382,59 +1559,52 @@ private fun JellyMixApp(
                                 onModeSelected = viewModel::applyGuestDjMode
                             )
                         }
-                        item { SearchCard(state.searchQuery, viewModel::setSearchQuery, visibleTracks.size) }
-                        item { DiscoveryFilters(state.discoveryFilter, viewModel::setDiscoveryFilter) }
-                        item { TrackSection(state.discoveryFilter.sectionTitle, discoveryTracks, state.liked, viewModel::selectTrack) }
+                        item { JarvisResultsSection(state, viewModel::selectTrack) }
                     }
                     Tab.Library -> {
                         item { SearchCard(state.searchQuery, viewModel::setSearchQuery, visibleTracks.size) }
-                        item { LibrarySummary(state.tracks, state.jellyfinPlaylists) }
+                        item { LibrarySummary(state.tracks, state.rawTrackCount) }
                         item { LibraryActions(state.tracks, viewModel::startQueue, viewModel::startShuffledQueue) }
-                        if (state.jellyfinPlaylists.isNotEmpty()) {
-                            item { JellyfinPlaylistRail(state.jellyfinPlaylists, viewModel::openPlaylist) }
-                        }
-                        item { TrackSection("Tracks", filterTracks(state.tracks.sortedBy { it.artist }, state.searchQuery), state.liked, viewModel::selectTrack) }
-                    }
-                    Tab.Playlists -> {
-                        if (state.jellyfinPlaylists.isNotEmpty()) {
-                            item { JellyfinPlaylistRail(state.jellyfinPlaylists, viewModel::openPlaylist) }
-                        }
-                        state.selectedPlaylist?.let { playlist ->
-                            item {
-                                SelectedPlaylistSection(
-                                    playlist = playlist,
-                                    tracks = state.selectedPlaylistTracks,
-                                    liked = state.liked,
-                                    onQueueSelected = { viewModel.startQueue(playlist.name, state.selectedPlaylistTracks) },
-                                    onTrackSelected = viewModel::selectTrack
-                                )
-                            }
-                        }
-                        if (state.queue.isNotEmpty()) {
-                            item { UpNextSection(state.queue, state.queueIndex, state.liked, state.currentTrack, state.djMode, viewModel::selectTrack, viewModel::clearQueue) }
-                        }
-                        items(mixes) { mix -> PlaylistCard(mix, state.liked, viewModel::startQueue, viewModel::startShuffledQueue, viewModel::selectTrack) }
+                        item { LibraryBrowseSegmentControl(state.libraryBrowseMode, viewModel::setLibraryBrowseMode) }
+                        libraryBrowseContent(
+                            mode = state.libraryBrowseMode,
+                            tracks = filterTracks(state.tracks, state.searchQuery),
+                            liked = state.liked,
+                            onTrackSelected = viewModel::selectTrack,
+                            onQueueSelected = viewModel::startQueue
+                        )
+                        item { SavedDiscoveryFilters(viewModel::setDiscoveryFilter) }
+                        item { TrackSection(state.discoveryFilter.sectionTitle, discoveryTracks, state.liked, viewModel::selectTrack) }
                     }
                 }
             }
-            if (!showNowPlaying) {
+            if (showQueueSheet) {
+                ModalBottomSheet(onDismissRequest = { showQueueSheet = false }) {
+                    QueueSheet(
+                        state = state,
+                        onTrackSelected = {
+                            showQueueSheet = false
+                            viewModel.selectTrack(it)
+                        },
+                        onClearQueue = viewModel::clearQueue,
+                        onMoveQueueItem = viewModel::moveQueueItem,
+                        onRemoveQueueItem = viewModel::removeQueueItem,
+                        onPlayNext = viewModel::playNext,
+                        onAddToQueue = viewModel::addToQueue
+                    )
+                }
+            }
+            if (!showNowPlaying && showMiniPlayer) {
                 PlayerBar(
                     track = state.currentTrack,
                     isPlaying = state.isPlaying,
-                    liked = state.liked[state.currentTrack.id] == true,
-                    status = state.status,
                     queueLabel = state.queueLabel,
-                    visualizerBands = state.visualizerBands,
-                    shuffleEnabled = state.shuffleEnabled,
-                    repeatEnabled = state.repeatEnabled,
                     onPlayPause = viewModel::togglePlayPause,
-                    onLike = viewModel::toggleLike,
-                    onLongListen = viewModel::markLongListen,
                     onSkip = viewModel::skip,
-                    onShuffle = viewModel::toggleShuffle,
-                    onRepeat = viewModel::toggleRepeat,
-                    onStartRadio = viewModel::startRadioFromCurrent,
+                    onPrevious = viewModel::previous,
                     onOpenNowPlaying = { showNowPlaying = true },
+                    onDismiss = { showMiniPlayer = false },
+                    onOpenQueue = { showQueueSheet = true },
                     modifier = Modifier.align(Alignment.BottomCenter)
                 )
             }
@@ -1457,13 +1627,88 @@ private fun HomeMoodChips(selected: String, onSelected: (String) -> Unit) {
 }
 
 @Composable
+private fun captionColor(): Color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.70f)
+
+@Composable
+private fun lowEmphasisButtonColors() = ButtonDefaults.buttonColors(
+    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+    contentColor = MaterialTheme.colorScheme.onSurface
+)
+
+@Composable
+private fun SectionHeader(text: String) {
+    Text(text, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+}
+
+private fun mixGradient(name: String): List<Color> {
+    val hash = name.hashCode().absoluteValue
+    val hue = hash % 360
+    fun colorAt(offset: Int, saturation: Float, value: Float): Color =
+        Color.hsv(((hue + offset) % 360).toFloat(), saturation, value)
+    return listOf(colorAt(0, 0.74f, 0.72f), colorAt(54, 0.62f, 0.36f), colorAt(132, 0.56f, 0.52f))
+}
+
+private fun initials(value: String): String =
+    value.split(" ", "-", "_")
+        .mapNotNull { it.firstOrNull()?.uppercaseChar() }
+        .take(2)
+        .joinToString("")
+        .ifBlank { "JM" }
+
+@Composable
+private fun MixesSegmentControl(selected: MixesSegment, onSelected: (MixesSegment) -> Unit) {
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(MixesSegment.entries) { segment ->
+            FilterChip(
+                selected = selected == segment,
+                onClick = { onSelected(segment) },
+                label = { Text(segment.label) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun LibraryBrowseSegmentControl(selected: LibraryBrowseMode, onSelected: (LibraryBrowseMode) -> Unit) {
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(LibraryBrowseMode.entries) { mode ->
+            FilterChip(
+                selected = selected == mode,
+                onClick = { onSelected(mode) },
+                label = { Text(mode.label) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun SavedDiscoveryFilters(onSelected: (DiscoveryFilter) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SectionHeader("Saved filters")
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(DiscoveryFilter.entries) { filter ->
+                FilterChip(
+                    selected = false,
+                    onClick = { onSelected(filter) },
+                    label = { Text(filter.label) }
+                )
+            }
+        }
+    }
+}
+
+private fun homeSpeedDialMixes(mixes: List<Mix>): List<Mix> =
+    mixes.filter { it.name in setOf("Quick Shuffle", "Rediscover", "Liked Radio", "Loud Flow", "Library Radio", "Weekly Discovery") }
+        .take(6)
+
+@Composable
 private fun SpeedDialGrid(
     mixes: List<Mix>,
     onQueueSelected: (String, List<Track>) -> Unit
 ) {
-    val rows = mixes.take(8).chunked(4)
+    val rows = mixes.take(6).chunked(3)
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("Speed dial", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
+        SectionHeader("Speed dial")
         rows.forEach { rowMixes ->
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 rowMixes.forEach { mix ->
@@ -1473,7 +1718,7 @@ private fun SpeedDialGrid(
                         modifier = Modifier.weight(1f)
                     )
                 }
-                repeat(4 - rowMixes.size) {
+                repeat(3 - rowMixes.size) {
                     Spacer(Modifier.weight(1f))
                 }
             }
@@ -1494,40 +1739,45 @@ private fun SpeedDialTile(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(104.dp)
+                .height(128.dp)
         ) {
-            mix.tracks.firstOrNull()?.let { track ->
-                Box(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .background(Brush.linearGradient(coverColors(track.genre)))
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(Brush.linearGradient(mixGradient(mix.name)))
+            )
+            mix.tracks.firstOrNull { !it.imageUrl.isNullOrBlank() }?.imageUrl?.let { imageUrl ->
+                AsyncImage(
+                    model = imageUrl,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    alpha = 0.22f,
+                    modifier = Modifier.matchParentSize()
                 )
-                track.imageUrl?.let { imageUrl ->
-                    AsyncImage(
-                        model = imageUrl,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.matchParentSize()
-                    )
-                }
-            } ?: Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
+            }
+            Text(
+                initials(mix.name),
+                style = MaterialTheme.typography.displaySmall,
+                fontWeight = FontWeight.Bold,
+                color = Color.White.copy(alpha = 0.86f),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .background(Color.Black.copy(alpha = 0.20f), CircleShape)
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
             )
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .background(Color.Black.copy(alpha = 0.48f))
-                    .padding(horizontal = 6.dp, vertical = 5.dp)
+                    .background(Color.Black.copy(alpha = 0.56f))
+                    .padding(horizontal = 8.dp, vertical = 7.dp)
             ) {
                 Text(
                     mix.name,
                     color = Color.White,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
             }
@@ -1579,7 +1829,7 @@ private fun ConnectionCard(
                         state.connectionLabel,
                         style = MaterialTheme.typography.bodySmall,
                         color = if (state.isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
@@ -1605,12 +1855,12 @@ private fun ConnectionCard(
                 Button(onClick = onConnect, enabled = !state.isLoading, modifier = Modifier.weight(1f)) {
                     Text(if (state.hasSession) "Reconnect" else "Connect")
                 }
-                Button(onClick = onReload, enabled = state.hasSession && !state.isLoading, modifier = Modifier.weight(1f)) {
+                OutlinedButton(onClick = onReload, enabled = state.hasSession && !state.isLoading, modifier = Modifier.weight(1f)) {
                     Text("Reload")
                 }
             }
             if (expanded || !state.hasSession) {
-                Button(onClick = onClearSession, enabled = state.hasSession, modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = onClearSession, enabled = state.hasSession, modifier = Modifier.fillMaxWidth()) {
                     Text("Clear session")
                 }
                 ThemeOptions(
@@ -1677,9 +1927,9 @@ private fun HeroCard(currentTrack: Track, serverUrl: String, connected: Boolean)
                 .padding(18.dp)
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(if (connected) "Streaming from Jellyfin" else "Demo discovery mode", color = Color(0xFF101113), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+                Text(if (connected) "Streaming from Jellyfin" else "Demo discovery mode", color = Color(0xFF101113), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                 Text("Queued: ${currentTrack.title} from ${currentTrack.album}", color = Color(0xFF101113), maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text("Source: $serverUrl", color = Color(0xFF101113), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("Source: $serverUrl", color = Color(0xFF101113), style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -1741,9 +1991,9 @@ private fun HomeNowCard(
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(if (state.isPlaying) "Now playing" else "Ready to play", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-                Text(state.currentTrack.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text("${state.currentTrack.artist} - ${state.currentTrack.album}", color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(state.queueLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(state.currentTrack.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(state.currentTrack.subtitle().text, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(state.queueLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     IconButton(onClick = onPlayPause) {
                         Icon(if (state.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, contentDescription = "Play")
@@ -1919,6 +2169,7 @@ private fun JarvisDjCard(
         "Chill it out",
         "Surprise me with fresh stuff"
     )
+    val discoverModes = listOf(GuestDjMode.Familiar, GuestDjMode.Discovery, GuestDjMode.DeepCuts)
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1930,7 +2181,7 @@ private fun JarvisDjCard(
                 }
             }
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(GuestDjMode.entries) { mode ->
+                items(discoverModes) { mode ->
                     FilterChip(
                         selected = state.djMode == mode,
                         onClick = { onModeSelected(mode) },
@@ -1970,6 +2221,40 @@ private fun JarvisDjCard(
                         label = { Text(suggestion) }
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun JarvisResultsSection(state: JellyMixState, onTrackSelected: (Track) -> Unit) {
+    val results = state.queue
+        .drop(state.queueIndex)
+        .ifEmpty {
+            buildGuestDjQueue(
+                mode = state.djMode,
+                seed = state.currentTrack,
+                tracks = state.tracks,
+                liked = state.liked,
+                longListens = state.longListens,
+                skips = state.skips,
+                localPlays = state.localPlays,
+                recentlyPlayedIds = state.recentTrackIds
+            )
+        }
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Jarvis results", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            state.djMessages.takeLast(1).firstOrNull()?.let { message ->
+                Text(message.text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            results.take(12).forEach { track ->
+                QueueReasonRow(track, state.liked[track.id] == true, queueReason(track, state.currentTrack, state.djMode)) {
+                    onTrackSelected(track)
+                }
+            }
+            if (results.isEmpty()) {
+                EmptyState("No DJ results yet", "Ask Jarvis for a vibe, artist lane, or discovery direction.")
             }
         }
     }
@@ -2028,19 +2313,18 @@ private fun VibeMixCard(
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             MixArtwork(mix)
-            Text(mix.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+            Text(mix.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             Text(mix.reason, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            mix.note?.let { Text(it, color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.labelMedium) }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                Button(onClick = { onQueueSelected(mix.name, mix.tracks) }, enabled = mix.tracks.isNotEmpty(), modifier = Modifier.weight(1f)) {
+                Button(onClick = { onQueueSelected(mix.name, mix.tracks) }, enabled = mix.tracks.isNotEmpty(), colors = lowEmphasisButtonColors(), modifier = Modifier.weight(1f)) {
                     Text("Play")
                 }
-                Button(onClick = { onShuffledQueueSelected(mix.name, mix.tracks) }, enabled = mix.tracks.isNotEmpty(), modifier = Modifier.weight(1f)) {
+                OutlinedButton(onClick = { onShuffledQueueSelected(mix.name, mix.tracks) }, enabled = mix.tracks.isNotEmpty(), modifier = Modifier.weight(1f)) {
                     Text("Shuffle")
                 }
             }
-            mix.tracks.take(3).forEach { track ->
-                QueueReasonRow(track, liked[track.id] == true, "${track.mood} / ${track.genre}") { onTrackSelected(track) }
-            }
+            mix.tracks.take(3).forEach { track -> QueueReasonRow(track, liked[track.id] == true) { onTrackSelected(track) } }
         }
     }
 }
@@ -2072,42 +2356,31 @@ private fun MixArtwork(mix: Mix) {
             .size(126.dp)
             .height(126.dp)
             .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .background(Brush.linearGradient(mixGradient(mix.name)))
     ) {
-        if (tracks.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Brush.linearGradient(listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.secondary))),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(Icons.Filled.Recommend, contentDescription = null, tint = Color(0xFF101113), modifier = Modifier.size(44.dp))
-            }
-        } else {
-            Column {
-                val topTracks = tracks.take(2)
-                val bottomTracks = tracks.drop(2).take(2)
-                Row {
-                    topTracks.forEach { track -> AlbumArt(track, size = 63) }
-                    repeat((2 - topTracks.size).coerceAtLeast(0)) {
-                        Box(
-                            Modifier
-                                .size(63.dp)
-                                .background(MaterialTheme.colorScheme.surfaceVariant)
-                        )
-                    }
-                }
-                Row {
-                    bottomTracks.forEach { track -> AlbumArt(track, size = 63) }
-                    repeat((2 - bottomTracks.size).coerceAtLeast(0)) {
-                        Box(
-                            Modifier
-                                .size(63.dp)
-                                .background(MaterialTheme.colorScheme.surfaceVariant)
-                        )
-                    }
-                }
-            }
+        tracks.firstOrNull { !it.imageUrl.isNullOrBlank() }?.imageUrl?.let { imageUrl ->
+            AsyncImage(
+                model = imageUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                alpha = 0.18f,
+                modifier = Modifier.matchParentSize()
+            )
+        }
+        Box(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .size(58.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.24f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                initials(mix.name),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = Color.White.copy(alpha = 0.9f)
+            )
         }
     }
 }
@@ -2121,25 +2394,26 @@ private fun MixRail(
     onTrackSelected: (Track) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        SectionHeader(title)
         LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             items(mixes) { mix ->
                 Card(
                     modifier = Modifier
                         .width(244.dp)
-                        .clickable { onQueueSelected(mix.name, mix.tracks) },
+                        .clickable(enabled = mix.tracks.isNotEmpty()) { onQueueSelected(mix.name, mix.tracks) },
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         MixArtwork(mix)
                         Text(mix.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         Text(mix.reason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        mix.note?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary) }
                         Text("${mix.tracks.size} tracks", style = MaterialTheme.typography.labelMedium)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                            Button(onClick = { onQueueSelected(mix.name, mix.tracks) }, modifier = Modifier.weight(1f)) {
+                            Button(onClick = { onQueueSelected(mix.name, mix.tracks) }, enabled = mix.tracks.isNotEmpty(), colors = lowEmphasisButtonColors(), modifier = Modifier.weight(1f)) {
                                 Text("Play")
                             }
-                            IconButton(onClick = { onShuffledQueueSelected(mix.name, mix.tracks) }) {
+                            IconButton(onClick = { onShuffledQueueSelected(mix.name, mix.tracks) }, enabled = mix.tracks.isNotEmpty()) {
                                 Icon(Icons.Filled.Shuffle, contentDescription = "Shuffle ${mix.name}")
                             }
                         }
@@ -2148,7 +2422,7 @@ private fun MixRail(
                                 "Starts with ${track.title}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
+                                maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.clickable { onTrackSelected(track) }
                             )
@@ -2163,7 +2437,7 @@ private fun MixRail(
 @Composable
 private fun TrackRail(title: String, tracks: List<Track>, onTrackSelected: (Track) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        SectionHeader(title)
         LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             items(tracks) { track ->
                 Card(
@@ -2174,8 +2448,8 @@ private fun TrackRail(title: String, tracks: List<Track>, onTrackSelected: (Trac
                 ) {
                     Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         AlbumArt(track, size = 128)
-                        Text(track.title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(track.artist, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(track.title, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(track.subtitle().text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -2186,11 +2460,105 @@ private fun TrackRail(title: String, tracks: List<Track>, onTrackSelected: (Trac
 @Composable
 private fun TrackSection(title: String, tracks: List<Track>, liked: Map<String, Boolean>, onTrackSelected: (Track) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        SectionHeader(title)
         if (tracks.isEmpty()) {
             EmptyState("No matching tracks", "Try another search or reload your Jellyfin library.")
         } else {
             tracks.forEach { track -> TrackRow(track, liked[track.id] == true) { onTrackSelected(track) } }
+        }
+    }
+}
+
+private fun LazyListScope.libraryBrowseContent(
+    mode: LibraryBrowseMode,
+    tracks: List<Track>,
+    liked: Map<String, Boolean>,
+    onTrackSelected: (Track) -> Unit,
+    onQueueSelected: (String, List<Track>) -> Unit
+) {
+    val canonical = deduplicateTracks(tracks)
+    when (mode) {
+        LibraryBrowseMode.Tracks -> item {
+            TrackSection("Tracks", canonical.sortedBy { it.title.lowercase() }, liked, onTrackSelected)
+        }
+        LibraryBrowseMode.Artists -> {
+            val artists = canonical
+                .filter { it.artist.isNotBlank() }
+                .groupBy { it.artist }
+                .toSortedMap(String.CASE_INSENSITIVE_ORDER)
+                .toList()
+            items(artists) { (artist, artistTracks) ->
+                LibraryGroupCard(
+                    title = artist,
+                    subtitle = "${artistTracks.size} tracks",
+                    tracks = artistTracks,
+                    liked = liked,
+                    onQueueSelected = { onQueueSelected(artist, artistTracks) },
+                    onTrackSelected = onTrackSelected
+                )
+            }
+        }
+        LibraryBrowseMode.Albums -> {
+            val albums = canonical
+                .filter { it.album.isNotBlank() }
+                .groupBy { it.album }
+                .toSortedMap(String.CASE_INSENSITIVE_ORDER)
+                .toList()
+            items(albums) { (album, albumTracks) ->
+                val artist = albumTracks.groupingBy { it.artist }.eachCount().maxByOrNull { it.value }?.key.orEmpty()
+                LibraryGroupCard(
+                    title = album,
+                    subtitle = listOf(artist, "${albumTracks.size} tracks").filter { it.isNotBlank() }.joinToString(" / "),
+                    tracks = albumTracks,
+                    liked = liked,
+                    onQueueSelected = { onQueueSelected(album, albumTracks) },
+                    onTrackSelected = onTrackSelected
+                )
+            }
+        }
+        LibraryBrowseMode.Genres -> {
+            val genres = canonical
+                .filter { it.genre.isNotBlank() }
+                .groupBy { it.genre }
+                .toSortedMap(String.CASE_INSENSITIVE_ORDER)
+                .toList()
+            items(genres) { (genre, genreTracks) ->
+                LibraryGroupCard(
+                    title = genre,
+                    subtitle = "${genreTracks.size} tracks",
+                    tracks = genreTracks,
+                    liked = liked,
+                    onQueueSelected = { onQueueSelected("$genre radio", genreTracks) },
+                    onTrackSelected = onTrackSelected
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LibraryGroupCard(
+    title: String,
+    subtitle: String,
+    tracks: List<Track>,
+    liked: Map<String, Boolean>,
+    onQueueSelected: () -> Unit,
+    onTrackSelected: (Track) -> Unit
+) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.weight(1f)) {
+                    Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Button(onClick = onQueueSelected, enabled = tracks.isNotEmpty(), colors = lowEmphasisButtonColors()) {
+                    Text("Play")
+                }
+            }
+            tracks.take(4).forEach { track ->
+                QueueReasonRow(track, liked[track.id] == true) { onTrackSelected(track) }
+            }
         }
     }
 }
@@ -2210,18 +2578,24 @@ private fun TrackRow(track: Track, liked: Boolean, onClick: () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
+            .heightIn(min = 64.dp)
             .clickable(onClick = onClick),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            AlbumArt(track)
-            Spacer(Modifier.width(12.dp))
+        Row(Modifier.padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            AlbumArt(track, size = 48, showProgress = true)
+            Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
-                Text(track.title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${track.artist} - ${track.album}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${track.genre} / ${track.mood} / ${(track.completion * 100).roundToInt()}% complete", style = MaterialTheme.typography.labelSmall)
+                Text(track.title, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(track.subtitle().text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            Icon(if (liked) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder, contentDescription = null, tint = if (liked) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outline)
+            Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                Icon(
+                    if (liked) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                    contentDescription = if (liked) "Liked" else "Not liked",
+                    tint = if (liked) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outline
+                )
+            }
         }
     }
 }
@@ -2239,13 +2613,14 @@ private fun PlaylistCard(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(mix.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+            Text(mix.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             Text(mix.reason, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            mix.note?.let { Text(it, color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.labelMedium) }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                Button(onClick = { onQueueSelected(mix.name, mix.tracks) }, modifier = Modifier.weight(1f)) {
+                Button(onClick = { onQueueSelected(mix.name, mix.tracks) }, enabled = mix.tracks.isNotEmpty(), colors = lowEmphasisButtonColors(), modifier = Modifier.weight(1f)) {
                     Text("Play")
                 }
-                Button(onClick = { onShuffledQueueSelected(mix.name, mix.tracks) }, modifier = Modifier.weight(1f)) {
+                OutlinedButton(onClick = { onShuffledQueueSelected(mix.name, mix.tracks) }, enabled = mix.tracks.isNotEmpty(), modifier = Modifier.weight(1f)) {
                     Text("Shuffle")
                 }
             }
@@ -2286,21 +2661,193 @@ private fun UpNextSection(
 }
 
 @Composable
-private fun QueueReasonRow(track: Track, liked: Boolean, reason: String, onClick: () -> Unit) {
-    Card(
+private fun QueueSummaryCard(state: JellyMixState, onOpenQueue: () -> Unit, onClearQueue: () -> Unit) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onOpenQueue)
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Up next", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Text(state.queueLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            OutlinedButton(onClick = onClearQueue, enabled = state.queue.isNotEmpty()) {
+                Text("Clear")
+            }
+        }
+    }
+}
+
+@Composable
+private fun QueueSheet(
+    state: JellyMixState,
+    onTrackSelected: (Track) -> Unit,
+    onClearQueue: () -> Unit,
+    onMoveQueueItem: (Int, Int) -> Unit,
+    onRemoveQueueItem: (Int) -> Unit,
+    onPlayNext: (Track) -> Unit,
+    onAddToQueue: (Track) -> Unit
+) {
+    val suggestions = buildAutoplayQueue(
+        seed = state.currentTrack,
+        tracks = state.tracks,
+        liked = state.liked,
+        longListens = state.longListens,
+        skips = state.skips,
+        localPlays = state.localPlays,
+        recentlyPlayedIds = state.recentTrackIds
+    ).filterNot { suggestion -> state.queue.any { it.id == suggestion.id } || suggestion.id == state.currentTrack.id }.take(4)
+    Column(
         modifier = Modifier
             .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, bottom = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.weight(1f)) {
+                Text("Up next", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Text(
+                    if (state.queue.isEmpty()) state.queueTitle else "${state.queueIndex + 1}/${state.queue.size} in queue",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            OutlinedButton(onClick = onClearQueue, enabled = state.queue.isNotEmpty()) {
+                Text("Clear")
+            }
+        }
+        if (state.queue.isEmpty()) {
+            EmptyState("Queue is empty", "Start a mix, vibe, playlist, or Jarvis DJ session.")
+        } else {
+            state.queue.drop(state.queueIndex).take(16).forEachIndexed { index, track ->
+                val queueIndex = state.queueIndex + index
+                QueueSheetRow(
+                    track = track,
+                    liked = state.liked[track.id] == true,
+                    reason = if (index == 0) "Now playing" else queueReason(track, state.currentTrack, state.djMode),
+                    queueIndex = queueIndex,
+                    canMoveUp = queueIndex > state.queueIndex,
+                    canMoveDown = queueIndex < state.queue.lastIndex,
+                    onClick = { onTrackSelected(track) },
+                    onMove = onMoveQueueItem,
+                    onRemove = onRemoveQueueItem
+                )
+            }
+        }
+        if (suggestions.isNotEmpty()) {
+            SectionHeader("Suggested")
+            suggestions.forEach { track ->
+                QueueSuggestionRow(
+                    track = track,
+                    liked = state.liked[track.id] == true,
+                    onPlayNext = { onPlayNext(track) },
+                    onAddToQueue = { onAddToQueue(track) },
+                    onClick = { onTrackSelected(track) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun QueueSheetRow(
+    track: Track,
+    liked: Boolean,
+    reason: String,
+    queueIndex: Int,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onClick: () -> Unit,
+    onMove: (Int, Int) -> Unit,
+    onRemove: (Int) -> Unit
+) {
+    var consumedGesture by remember(track.id, queueIndex) { mutableStateOf(false) }
+    QueueReasonRow(
+        track = track,
+        liked = liked,
+        reason = reason,
+        modifier = Modifier.pointerInput(track.id, queueIndex) {
+            detectDragGestures(
+                onDragStart = { consumedGesture = false },
+                onDragEnd = { consumedGesture = false },
+                onDragCancel = { consumedGesture = false }
+            ) { change, dragAmount ->
+                if (consumedGesture) return@detectDragGestures
+                when {
+                    dragAmount.x < -36f || dragAmount.x > 36f -> {
+                        consumedGesture = true
+                        change.consume()
+                        onRemove(queueIndex)
+                    }
+                    dragAmount.y < -28f && canMoveUp -> {
+                        consumedGesture = true
+                        change.consume()
+                        onMove(queueIndex, queueIndex - 1)
+                    }
+                    dragAmount.y > 28f && canMoveDown -> {
+                        consumedGesture = true
+                        change.consume()
+                        onMove(queueIndex, queueIndex + 1)
+                    }
+                }
+            }
+        },
+        onClick = onClick
+    )
+}
+
+@Composable
+private fun QueueSuggestionRow(
+    track: Track,
+    liked: Boolean,
+    onPlayNext: () -> Unit,
+    onAddToQueue: () -> Unit,
+    onClick: () -> Unit
+) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            QueueReasonRow(track, liked, "Suggested", onClick = onClick)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = onPlayNext, colors = lowEmphasisButtonColors(), modifier = Modifier.weight(1f)) {
+                    Text("Play next")
+                }
+                OutlinedButton(onClick = onAddToQueue, modifier = Modifier.weight(1f)) {
+                    Text("Add to queue")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QueueReasonRow(track: Track, liked: Boolean, reason: String? = null, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = 64.dp)
             .clickable(onClick = onClick),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
     ) {
-        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            AlbumArt(track, size = 46)
+        Row(Modifier.padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            AlbumArt(track, size = 48, showProgress = true)
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
-                Text(track.title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${track.artist} - $reason", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(track.title, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(track.subtitle().text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                if (!reason.isNullOrBlank()) {
+                    Text(reason, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
             }
-            Icon(if (liked) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder, contentDescription = null, tint = if (liked) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outline)
+            Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                Icon(
+                    if (liked) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                    contentDescription = if (liked) "Liked" else "Not liked",
+                    tint = if (liked) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outline
+                )
+            }
         }
     }
 }
@@ -2348,7 +2895,7 @@ private fun LibraryActions(
             Button(onClick = { onQueueSelected("Library", tracks) }, enabled = tracks.isNotEmpty(), modifier = Modifier.weight(1f)) {
                 Text("Play all")
             }
-            Button(onClick = { onShuffledQueueSelected("Library", tracks) }, enabled = tracks.isNotEmpty(), modifier = Modifier.weight(1f)) {
+            OutlinedButton(onClick = { onShuffledQueueSelected("Library", tracks) }, enabled = tracks.isNotEmpty(), modifier = Modifier.weight(1f)) {
                 Text("Shuffle all")
             }
         }
@@ -2358,7 +2905,7 @@ private fun LibraryActions(
 @Composable
 private fun JellyfinPlaylistRail(playlists: List<JellyfinPlaylist>, onPlaylistSelected: (JellyfinPlaylist) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("Jellyfin playlists", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        SectionHeader("Jellyfin playlists")
         LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             items(playlists) { playlist ->
                 Card(
@@ -2369,7 +2916,7 @@ private fun JellyfinPlaylistRail(playlists: List<JellyfinPlaylist>, onPlaylistSe
                 ) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         PlaylistArt(playlist)
-                        Text(playlist.name, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(playlist.name, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         Text("${playlist.childCount} items", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
@@ -2388,7 +2935,7 @@ private fun SelectedPlaylistSection(
 ) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(playlist.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+            Text(playlist.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             Text(
                 if (tracks.isEmpty()) "No tracks loaded yet." else "${tracks.size} playable tracks from Jellyfin.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -2403,21 +2950,43 @@ private fun SelectedPlaylistSection(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun LibrarySummary(tracks: List<Track>, playlists: List<JellyfinPlaylist>) {
+private fun LibrarySummary(tracks: List<Track>, rawTrackCount: Int) {
+    val canonicalTracks = deduplicateTracks(tracks)
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-        StatCard("Artists", tracks.map { it.artist }.distinct().size.toString(), Modifier.weight(1f))
-        StatCard("Albums", tracks.map { it.album }.distinct().size.toString(), Modifier.weight(1f))
-        StatCard("Lists", playlists.size.toString(), Modifier.weight(1f))
+        StatCard("Artists", canonicalTracks.map { it.artist }.filter { it.isNotBlank() }.distinct().size.toString(), Modifier.weight(1f))
+        StatCard("Albums", canonicalTracks.map { it.album }.filter { it.isNotBlank() }.distinct().size.toString(), Modifier.weight(1f))
+        StatCard(
+            "Tracks",
+            canonicalTracks.size.toString(),
+            Modifier.weight(1f),
+            tooltip = "${canonicalTracks.size} deduped tracks from ${rawTrackCount.coerceAtLeast(canonicalTracks.size)} raw Jellyfin items."
+        )
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun StatCard(label: String, value: String, modifier: Modifier = Modifier) {
-    Card(modifier = modifier, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
-            Text(label, style = MaterialTheme.typography.labelMedium)
+private fun StatCard(label: String, value: String, modifier: Modifier = Modifier, tooltip: String? = null) {
+    val content: @Composable (Modifier) -> Unit = { contentModifier ->
+        Card(modifier = contentModifier, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+            Column(Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Text(label, style = MaterialTheme.typography.labelMedium)
+            }
+        }
+    }
+    if (tooltip.isNullOrBlank()) {
+        content(modifier)
+    } else {
+        TooltipBox(
+            positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+            tooltip = { PlainTooltip { Text(tooltip) } },
+            state = rememberTooltipState(),
+            modifier = modifier
+        ) {
+            content(Modifier.fillMaxWidth())
         }
     }
 }
@@ -2436,6 +3005,7 @@ private fun NowPlayingPage(
     onQueueSelected: (String, List<Track>) -> Unit,
     onShuffledQueueSelected: (String, List<Track>) -> Unit,
     onClearQueue: () -> Unit,
+    onOpenQueue: () -> Unit,
     onTrackSelected: (Track) -> Unit
 ) {
     val track = state.currentTrack
@@ -2454,9 +3024,9 @@ private fun NowPlayingPage(
                     onFullscreen = { showFullscreenVisualizer = true }
                 )
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(track.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Text(track.artist, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(track.album, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(track.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(track.artist, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(track.album, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
                 LinearProgressIndicator(progress = { track.completion.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
                 Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
@@ -2499,7 +3069,7 @@ private fun NowPlayingPage(
         }
         GuestDjModeCard(state.djMode, onDjModeSelected)
         if (state.queue.isNotEmpty()) {
-            UpNextSection(state.queue, state.queueIndex, state.liked, state.currentTrack, state.djMode, onTrackSelected, onClearQueue = onClearQueue)
+            QueueSummaryCard(state = state, onOpenQueue = onOpenQueue, onClearQueue = onClearQueue)
         }
         AutoplayPreviewSection(state, onTrackSelected)
         MixRail("More to play", mixes.take(4), onQueueSelected, onShuffledQueueSelected, onTrackSelected)
@@ -2597,8 +3167,8 @@ private fun FullscreenVisualizerDialog(
                     .align(Alignment.BottomStart)
                     .padding(22.dp)
             ) {
-                Text(track.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(track.artist, style = MaterialTheme.typography.titleMedium, color = Color.White.copy(alpha = 0.72f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(track.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(track.artist, style = MaterialTheme.typography.titleMedium, color = Color.White.copy(alpha = 0.72f), maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
             IconButton(
                 onClick = onDismiss,
@@ -2651,66 +3221,100 @@ private fun DrivingControlButton(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PlayerBar(
     track: Track,
     isPlaying: Boolean,
-    liked: Boolean,
-    status: String,
     queueLabel: String,
-    visualizerBands: List<Float>,
-    shuffleEnabled: Boolean,
-    repeatEnabled: Boolean,
     onPlayPause: () -> Unit,
-    onLike: () -> Unit,
-    onLongListen: () -> Unit,
     onSkip: () -> Unit,
-    onShuffle: () -> Unit,
-    onRepeat: () -> Unit,
-    onStartRadio: () -> Unit,
+    onPrevious: () -> Unit,
     onOpenNowPlaying: () -> Unit,
+    onDismiss: () -> Unit,
+    onOpenQueue: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Surface(tonalElevation = 8.dp, shadowElevation = 8.dp, modifier = modifier.fillMaxWidth().clickable(onClick = onOpenNowPlaying)) {
-        Column(Modifier.padding(start = 12.dp, top = 8.dp, end = 12.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            LinearProgressIndicator(progress = { track.completion.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+    var dragX by remember(track.id) { mutableStateOf(0f) }
+    var dragY by remember(track.id) { mutableStateOf(0f) }
+    Surface(
+        tonalElevation = 8.dp,
+        shadowElevation = 8.dp,
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpenNowPlaying)
+            .pointerInput(track.id) {
+                detectDragGestures(
+                    onDragStart = {
+                        dragX = 0f
+                        dragY = 0f
+                    },
+                    onDragEnd = {
+                        when {
+                            dragY < -72f && abs(dragY) > abs(dragX) -> onOpenNowPlaying()
+                            dragY > 72f && abs(dragY) > abs(dragX) -> onDismiss()
+                            dragX < -72f && abs(dragX) > abs(dragY) -> onSkip()
+                            dragX > 72f && abs(dragX) > abs(dragY) -> onPrevious()
+                        }
+                        dragX = 0f
+                        dragY = 0f
+                    },
+                    onDragCancel = {
+                        dragX = 0f
+                        dragY = 0f
+                    }
+                ) { change, dragAmount ->
+                    dragX += dragAmount.x
+                    dragY += dragAmount.y
+                    change.consume()
+                }
+            }
+    ) {
+        Column(Modifier.padding(start = 12.dp, top = 8.dp, end = 12.dp, bottom = 0.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                AlbumArt(track, size = 38)
+                AlbumArt(track, size = 42)
                 Spacer(Modifier.width(10.dp))
                 Column(
                     Modifier
                         .weight(1f)
                         .clickable(onClick = onOpenNowPlaying)
                 ) {
-                    Text(track.title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        track.title,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE)
+                    )
+                    Text(
+                        track.artist.ifBlank { "Unknown artist" },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        queueLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.clickable(onClick = onOpenQueue)
+                    )
                 }
-                IconButton(onClick = onShuffle) {
-                    Icon(Icons.Filled.Shuffle, contentDescription = "Shuffle", tint = if (shuffleEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                IconButton(onClick = onLike) { Icon(if (liked) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder, contentDescription = "Like") }
-                IconButton(onClick = onPlayPause) { Icon(if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, contentDescription = "Play") }
-                IconButton(onClick = onSkip) { Icon(Icons.Filled.SkipNext, contentDescription = "Skip") }
-                IconButton(onClick = onRepeat) {
-                    Icon(Icons.Filled.Repeat, contentDescription = "Repeat", tint = if (repeatEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+                IconButton(onClick = onPrevious) { Icon(Icons.Filled.SkipPrevious, contentDescription = "Previous") }
+                IconButton(onClick = onPlayPause) { Icon(if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, contentDescription = if (isPlaying) "Pause" else "Play") }
+                IconButton(onClick = onSkip) { Icon(Icons.Filled.SkipNext, contentDescription = "Next") }
             }
-            MusicVisualizer(
-                bands = visualizerBands,
-                isPlaying = isPlaying,
-                frame = ambientFrame(visualizerBands.size.coerceAtLeast(1)).copy(bands = visualizerBands),
-                compact = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(16.dp)
-            )
+            LinearProgressIndicator(progress = { track.completion.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(2.dp))
         }
     }
 }
 
 @Composable
-private fun AlbumArt(track: Track, size: Int = 54) {
-    val colors = coverColors(track.genre)
+private fun AlbumArt(track: Track, size: Int = 54, showProgress: Boolean = false) {
+    val colors = coverColors(track.genre).let { base ->
+        if (track.imageUrl.isNullOrBlank()) mixGradient("${track.title}:${track.artist}") else base
+    }
     Box(
         modifier = Modifier
             .size(size.dp)
@@ -2730,6 +3334,24 @@ private fun AlbumArt(track: Track, size: Int = 54) {
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Text(
+                initials(track.title),
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White.copy(alpha = 0.92f)
+            )
+        }
+        if (showProgress && track.completion > 0f && track.completion < 1f) {
+            LinearProgressIndicator(
+                progress = { track.completion.coerceIn(0f, 1f) },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(3.dp),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = Color.Black.copy(alpha = 0.28f)
             )
         }
     }
@@ -2765,12 +3387,24 @@ private fun coverColors(genre: String): List<Color> =
         else -> listOf(Color(0xFFF7F3E8), Color(0xFF00D9B5))
     }
 
-private enum class Tab(val label: String, val icon: ImageVector) {
+enum class Tab(val label: String, val icon: ImageVector) {
     Home("Home", Icons.Filled.Home),
-    Vibe("Vibe", Icons.Filled.GraphicEq),
+    Mixes("Mixes", Icons.AutoMirrored.Filled.PlaylistPlay),
     Discover("Discover", Icons.Filled.Explore),
-    Library("Library", Icons.Filled.LibraryMusic),
-    Playlists("Playlists", Icons.AutoMirrored.Filled.PlaylistPlay)
+    Library("Library", Icons.Filled.LibraryMusic)
+}
+
+enum class MixesSegment(val label: String) {
+    Mixes("Mixes"),
+    Vibes("Vibes"),
+    Yours("Yours")
+}
+
+enum class LibraryBrowseMode(val label: String) {
+    Artists("Artists"),
+    Albums("Albums"),
+    Tracks("Tracks"),
+    Genres("Genres")
 }
 
 enum class DiscoveryFilter(val label: String, val sectionTitle: String) {
@@ -2797,8 +3431,11 @@ data class JellyMixState(
     val password: String = "",
     val token: String = "",
     val userId: String = "",
-    val themeMode: ThemeMode = ThemeMode.System,
+    val themeMode: ThemeMode = ThemeMode.Dark,
     val accentTheme: AccentTheme = AccentTheme.Jelly,
+    val selectedTab: Tab = Tab.Home,
+    val mixesSegment: MixesSegment = MixesSegment.Mixes,
+    val libraryBrowseMode: LibraryBrowseMode = LibraryBrowseMode.Tracks,
     val searchQuery: String = "",
     val vibeQuery: String = "",
     val discoveryFilter: DiscoveryFilter = DiscoveryFilter.LongListens,
@@ -2820,6 +3457,8 @@ data class JellyMixState(
     val longListens: Map<String, Int>,
     val localPlays: Map<String, Int>,
     val recentTrackIds: List<String>,
+    val rawTrackCount: Int = tracks.sumOf { 1 + it.alternates.size },
+    val audioFeatures: Map<String, TrackAudioFeatures> = tracks.associate { it.id to inferAudioFeatures(it) },
     val visualizerBands: List<Float> = restingVisualizerBands(),
     val audioFrame: AudioAnalysisFrame = ambientFrame(),
     val visualizerPermissionGranted: Boolean = false,
@@ -2842,7 +3481,7 @@ data class JellyMixState(
         if (queue.isEmpty()) queueTitle else "$queueTitle ${queueIndex + 1}/${queue.size}"
 
     fun rankedTracks(): List<Track> =
-        tracks.sortedByDescending { track ->
+        deduplicateTracks(tracks).sortedByDescending { track ->
             recommendationScore(
                 track = track,
                 liked = liked[track.id] == true,
@@ -2853,7 +3492,7 @@ data class JellyMixState(
         }
 
     fun recentTracks(): List<Track> =
-        recentTrackIds.mapNotNull { id -> tracks.firstOrNull { it.id == id } }
+        deduplicateTracks(recentTrackIds.mapNotNull { id -> tracks.firstOrNull { it.id == id } })
 }
 
 data class Track(
@@ -2868,10 +3507,57 @@ data class Track(
     val completion: Float,
     val skipped: Int,
     val liked: Boolean,
+    val imageUrl: String? = null,
+    val bitrate: Int = 0,
+    val tags: Set<String> = emptySet(),
+    val filename: String? = null,
+    val alternates: List<TrackAlternate> = emptyList()
+)
+
+data class TrackAlternate(
+    val id: String,
+    val title: String,
+    val artist: String,
+    val album: String,
+    val durationSec: Int,
+    val bitrate: Int,
     val imageUrl: String? = null
 )
 
-data class Mix(val name: String, val reason: String, val tracks: List<Track>)
+data class TrackSubtitle(val segments: List<String>) {
+    val text: String = segments.filter { it.isNotBlank() }.joinToString(" • ")
+}
+
+data class TrackAudioFeatures(
+    val bpm: Float,
+    val rmsEnergy: Float,
+    val spectralCentroid: Float,
+    val dynamicRange: Float,
+    val valence: Float,
+    val vocalPresence: Float,
+    val tempoStability: Float
+)
+
+data class CleanTrackMetadata(
+    val title: String,
+    val artist: String,
+    val album: String,
+    val genre: String,
+    val tags: Set<String>,
+    val filename: String?
+)
+
+private data class TrackDedupKey(
+    val title: String,
+    val artist: String
+)
+
+data class Mix(
+    val name: String,
+    val reason: String,
+    val tracks: List<Track>,
+    val note: String? = null
+)
 
 data class VibeProfile(
     val name: String,
@@ -2887,7 +3573,7 @@ data class JellyfinPlaylist(val id: String, val name: String, val childCount: In
 
 private data class JellyfinSession(val token: String, val userId: String)
 
-private data class JellyfinLibraryLoad(val tracks: List<Track>, val playlists: List<JellyfinPlaylist>)
+private data class JellyfinLibraryLoad(val tracks: List<Track>, val playlists: List<JellyfinPlaylist>, val rawTrackCount: Int = tracks.sumOf { 1 + it.alternates.size })
 
 data class JellyfinServerInfo(val serverName: String, val version: String)
 
@@ -2902,6 +3588,107 @@ internal val sampleTracks = listOf(
     Track("sample-8", "Good Weather Lie", "Harbor Kids", "Open Windows", "Indie", "Bright", 196, 15, 0.87f, 2, true)
 )
 
+private val internalGenreLabels = setOf("loud", "drive", "library", "crossover")
+private val retainedVariantSuffixes = setOf("live", "remix", "acoustic", "instrumental", "demo")
+
+internal fun cleanTrackMetadata(
+    title: String,
+    artist: String,
+    album: String,
+    genres: List<String>,
+    fallbackPath: String? = null
+): CleanTrackMetadata {
+    val filename = fallbackPath?.substringAfterLast('/')?.substringAfterLast('\\')?.substringBeforeLast('.', missingDelimiterValue = fallbackPath)
+        ?.takeIf { it.isNotBlank() }
+    val cleanTitle = title.removePrefix("MID -").trim().ifBlank { filename ?: "Untitled" }
+    val cleanArtist = artist.cleanUnknown("Unknown Artist")
+    val cleanAlbum = album.cleanUnknown("Unknown Album")
+    val splitGenres = genres.flatMap { it.split("/", ";", ",") }.map { it.trim() }.filter { it.isNotBlank() }
+    val tags = splitGenres.filter { it.lowercase() in internalGenreLabels }.toSet()
+    val genre = splitGenres.firstOrNull { it.lowercase() !in internalGenreLabels }.orEmpty()
+    return CleanTrackMetadata(
+        title = cleanTitle,
+        artist = cleanArtist,
+        album = cleanAlbum,
+        genre = genre,
+        tags = tags,
+        filename = filename
+    )
+}
+
+internal fun Track.subtitle(): TrackSubtitle =
+    TrackSubtitle(
+        listOf(
+            artist.cleanUnknown("Unknown Artist").ifBlank { filename.orEmpty() },
+            album.cleanUnknown("Unknown Album"),
+            genre.takeIf { it.isNotBlank() && it.lowercase() !in internalGenreLabels }.orEmpty()
+        ).filter { it.isNotBlank() }
+    )
+
+private fun String.cleanUnknown(unknownValue: String): String =
+    trim().takeUnless { it.isBlank() || it.equals(unknownValue, ignoreCase = true) }.orEmpty()
+
+internal fun normalizeDedupTitle(title: String): String {
+    val retained = mutableListOf<String>()
+    val withoutIgnoredSuffixes = title.replace(Regex("\\(([^)]*)\\)")) { match ->
+        val suffix = match.groupValues[1].trim()
+        if (suffix.lowercase() in retainedVariantSuffixes) {
+            retained += suffix.lowercase()
+        }
+        " "
+    }
+    return (withoutIgnoredSuffixes + " " + retained.joinToString(" "))
+        .lowercase()
+        .replace(Regex("[^a-z0-9]+"), " ")
+        .trim()
+        .replace(Regex("\\s+"), " ")
+}
+
+internal fun normalizeDedupText(value: String): String =
+    value.lowercase()
+        .replace(Regex("[^a-z0-9]+"), " ")
+        .trim()
+        .replace(Regex("\\s+"), " ")
+
+internal fun deduplicateTracks(tracks: List<Track>): List<Track> {
+    if (tracks.size <= 1) return tracks
+    val groups = mutableMapOf<TrackDedupKey, MutableList<Track>>()
+    tracks.forEach { track ->
+        val key = TrackDedupKey(normalizeDedupTitle(track.title), normalizeDedupText(track.artist))
+        groups.getOrPut(key) { mutableListOf() } += track
+    }
+    return groups.values.flatMap { candidates ->
+        val durationClusters = mutableListOf<MutableList<Track>>()
+        candidates.sortedBy { it.durationSec }.forEach { track ->
+            val cluster = durationClusters.firstOrNull { existing -> existing.any { kotlin.math.abs(it.durationSec - track.durationSec) <= 2 } }
+            if (cluster == null) durationClusters += mutableListOf(track) else cluster += track
+        }
+        durationClusters.map { cluster ->
+            val canonical = cluster.maxWithOrNull(
+                compareBy<Track> { it.bitrate }
+                    .thenBy { if (it.imageUrl.isNullOrBlank()) 0 else 1 }
+                    .thenBy { it.plays }
+                    .thenBy { it.durationSec }
+            ) ?: cluster.first()
+            val alternates = cluster
+                .filterNot { it.id == canonical.id }
+                .sortedByDescending { it.bitrate }
+                .map {
+                    TrackAlternate(
+                        id = it.id,
+                        title = it.title,
+                        artist = it.artist,
+                        album = it.album,
+                        durationSec = it.durationSec,
+                        bitrate = it.bitrate,
+                        imageUrl = it.imageUrl
+                    )
+                }
+            canonical.copy(alternates = (canonical.alternates + alternates).distinctBy { it.id })
+        }
+    }
+}
+
 internal fun recommendationScore(track: Track, liked: Boolean, longListens: Int, skips: Int, localPlays: Int = 0): Float {
     val likeBoost = if (liked) 35f else 0f
     val completionBoost = track.completion * 30f
@@ -2912,54 +3699,234 @@ internal fun recommendationScore(track: Track, liked: Boolean, longListens: Int,
     return likeBoost + completionBoost + playBoost + localPlayBoost + longListenBoost - skipPenalty
 }
 
+internal fun inferAudioFeatures(track: Track): TrackAudioFeatures {
+    val text = "${track.title} ${track.artist} ${track.album} ${track.genre} ${track.mood} ${track.tags.joinToString(" ")}".lowercase()
+    fun hasAny(vararg terms: String): Boolean = terms.any { it in text }
+    val genre = track.genre.lowercase()
+    val mood = track.mood.lowercase()
+    val baseEnergy = when {
+        hasAny("metal", "punk", "hardcore", "rage", "loud") || genre in setOf("rock", "metal", "punk") || mood == "loud" -> 0.84f
+        hasAny("dance", "edm", "electronic", "synth", "workout", "drive") || genre in setOf("electronic", "synth", "dance") -> 0.72f
+        hasAny("ambient", "calm", "sleep", "piano", "acoustic") || genre in setOf("ambient", "classical", "folk") -> 0.28f
+        mood in setOf("calm", "warm", "late") -> 0.42f
+        else -> 0.55f
+    }
+    val energy = (baseEnergy + (track.completion - 0.5f) * 0.1f - track.skipped.coerceAtMost(5) * 0.015f).coerceIn(0.05f, 1f)
+    val bpm = when {
+        hasAny("hype", "workout", "dance", "edm", "fast") -> 136f
+        hasAny("metal", "punk", "rock", "drive", "loud") || genre in setOf("rock", "metal", "punk") -> 126f
+        hasAny("ambient", "sad", "slow", "ballad", "sleep", "acoustic") -> 78f
+        hasAny("late", "night", "chill", "calm") -> 92f
+        genre in setOf("electronic", "synth", "dance") -> 122f
+        else -> 106f
+    } + ((track.id.hashCode().absoluteValue % 15) - 7)
+    val centroid = when {
+        hasAny("bright", "pop", "dance", "synth", "electronic") -> 0.74f
+        hasAny("metal", "punk", "angry", "rage", "dark") -> 0.34f
+        hasAny("sad", "late", "ambient", "calm", "folk", "acoustic") -> 0.32f
+        genre == "rock" -> 0.48f
+        else -> 0.56f
+    }.coerceIn(0.05f, 1f)
+    val dynamicRange = when {
+        hasAny("angry", "rage", "metal", "punk", "live") -> 0.82f
+        hasAny("classical", "jazz") -> 0.72f
+        hasAny("focus", "ambient", "electronic", "synth") -> 0.28f
+        hasAny("chill", "sad", "late") -> 0.38f
+        else -> 0.54f
+    }
+    val valence = when {
+        hasAny("sad", "blue", "heart", "alone", "hurt", "late", "dark") -> 0.24f
+        hasAny("angry", "rage", "hate", "fight") -> 0.18f
+        hasAny("happy", "sun", "good", "bright", "love") -> 0.78f
+        else -> 0.5f
+    }
+    val vocalPresence = when {
+        genre in setOf("ambient", "classical", "electronic", "synth") || hasAny("instrumental", "ost", "score", "ambient") -> 0.24f
+        else -> 0.72f
+    }
+    val tempoStability = when {
+        hasAny("live", "jazz", "acoustic") -> 0.42f
+        hasAny("focus", "ambient", "electronic", "synth", "dance") -> 0.82f
+        else -> 0.62f
+    }
+    return TrackAudioFeatures(
+        bpm = bpm.coerceIn(50f, 180f),
+        rmsEnergy = energy,
+        spectralCentroid = centroid,
+        dynamicRange = dynamicRange.coerceIn(0.05f, 1f),
+        valence = valence.coerceIn(0.05f, 1f),
+        vocalPresence = vocalPresence.coerceIn(0.05f, 1f),
+        tempoStability = tempoStability.coerceIn(0.05f, 1f)
+    )
+}
+
+private data class MixDefinition(
+    val name: String,
+    val reason: String,
+    val targetSize: Int,
+    val scorer: (Track) -> Float
+)
+
+private data class ScoredTrack(val track: Track, val score: Float)
+
 internal fun buildMixes(
     rankedTracks: List<Track>,
     liked: Map<String, Boolean>,
     longListens: Map<String, Int>,
     skips: Map<String, Int> = emptyMap(),
     localPlays: Map<String, Int> = emptyMap(),
-    recentTracks: List<Track> = emptyList()
+    recentTracks: List<Track> = emptyList(),
+    features: Map<String, TrackAudioFeatures> = rankedTracks.associate { it.id to inferAudioFeatures(it) },
+    daySeed: String = LocalDate.now().toString()
 ): List<Mix> {
-    val mixLength = 36
-    val shortMixLength = 30
-    val weeklyDiscoveryTracks = rankedTracks
-        .filter { liked[it.id] != true && it.id !in recentTracks.map { recent -> recent.id } }
-        .sortedByDescending {
-            recommendationScore(it, false, longListens[it.id] ?: 0, skips[it.id] ?: 0, localPlays[it.id] ?: 0) +
-                if (it.completion >= 0.75f) 12f else 0f
+    val library = deduplicateTracks(rankedTracks)
+    val recentIds = deduplicateTracks(recentTracks).map { it.id }.toSet()
+    val likedIds = library.filter { liked[it.id] == true || it.liked }.map { it.id }.toSet()
+    val libraryCenter = features.featureCenter(library)
+    val likedCenter = features.featureCenter(library.filter { it.id in likedIds }).takeIf { likedIds.isNotEmpty() } ?: libraryCenter
+    val definitions = listOf(
+        MixDefinition("Weekly Discovery", "Low-play tracks with strong completion, like, and low-skip affinity signals.", 36) { track ->
+            val lowPlay = 1f / (1f + (localPlays[track.id] ?: track.plays).toFloat())
+            val affinity = track.completion * 0.55f +
+                (if ((skips[track.id] ?: track.skipped) == 0) 0.25f else 0f) +
+                (if (track.id in likedIds) 0.15f else 0f)
+            (lowPlay * 70f) + (affinity * 50f) + if (track.id in recentIds) -45f else 0f
+        },
+        MixDefinition("Heavy Rotation", "Tracks with the strongest recent local play count.", 30) { track ->
+            ((localPlays[track.id] ?: 0) * 100f) + track.dailyJitter("$daySeed:heavy") * 0.01f
+        },
+        MixDefinition("Long Listen Mix", "Longer tracks with high completion and long-listen history.", 30) { track ->
+            (track.completion * 100f) + (track.durationSec / 12f) + ((longListens[track.id] ?: 0) * 55f)
+        },
+        MixDefinition("Quick Shuffle", "Low-skip tracks rotated by a daily seed with a broad artist spread.", 40) { track ->
+            val skipScore = 100f - ((skips[track.id] ?: track.skipped).coerceAtMost(10) * 10f)
+            skipScore + track.dailyJitter("$daySeed:quick")
+        },
+        MixDefinition("Rediscover", "Historically played tracks you have not played recently.", 30) { track ->
+            if (track.id in recentIds || (localPlays[track.id] ?: 0) > 0) -1000f else track.plays * 18f + track.dailyJitter("$daySeed:rediscover") * 0.05f
+        },
+        MixDefinition("Liked Radio", "Tracks closest to your explicit likes.", 30) { track ->
+            val explicitLike = if (track.id in likedIds) 120f else 0f
+            explicitLike + (1f - features.forTrack(track).distanceTo(likedCenter)) * 80f
+        },
+        MixDefinition("Library Radio", "A library-wide similarity station instead of a favorite or popularity sort.", 36) { track ->
+            (1f - features.forTrack(track).distanceTo(libraryCenter)) * 100f + track.dailyJitter("$daySeed:library") * 0.04f
+        },
+        MixDefinition("Loud Flow", "Energy-ranked tracks using cached audio-feature energy and dynamics.", 30) { track ->
+            val feature = features.forTrack(track)
+            feature.rmsEnergy * 85f + feature.dynamicRange * 30f + feature.spectralCentroid * 12f
         }
-        .artistDiverseTake(mixLength)
-    val longListenTracks = rankedTracks.sortedByDescending { it.durationSec + ((longListens[it.id] ?: 0) * 120) }.artistDiverseTake(shortMixLength)
-    val likedTracks = rankedTracks.filter { liked[it.id] == true }.artistDiverseTake(shortMixLength)
-    val rediscoverTracks = rankedTracks.sortedWith(compareBy<Track> { it.plays }.thenByDescending { it.completion }).artistDiverseTake(shortMixLength)
-    val quickShuffleTracks = rankedTracks
-        .filter { (skips[it.id] ?: it.skipped) <= 2 }
-        .stableShuffleBy("quick-shuffle")
-        .artistDiverseTake(40)
-    val strongestGenre = likedTracks
-        .groupingBy { it.genre }
-        .eachCount()
-        .maxByOrNull { it.value }
-        ?.key
-    val genreTracks = strongestGenre?.let { genre -> rankedTracks.filter { it.genre == genre }.artistDiverseTake(shortMixLength) }.orEmpty()
-    val strongestMood = rankedTracks
-        .filter { (longListens[it.id] ?: 0) > 0 || liked[it.id] == true }
-        .groupingBy { it.mood }
-        .eachCount()
-        .maxByOrNull { it.value }
-        ?.key
-    val moodTracks = strongestMood?.let { mood -> rankedTracks.filter { it.mood == mood }.artistDiverseTake(shortMixLength) }.orEmpty()
-    return listOf(
-        Mix("Weekly Discovery", "Fresh picks from your library based on completions, likes, and low skips.", weeklyDiscoveryTracks.ifEmpty { rankedTracks.artistDiverseTake(shortMixLength) }),
-        Mix("Heavy Rotation", "High completion, likes, and repeat plays.", rankedTracks.artistDiverseTake(shortMixLength)),
-        Mix("Long Listen Mix", "Songs you finish or keep around the longest.", longListenTracks),
-        Mix("Quick Shuffle", "A loose station of familiar tracks that usually survive skips.", quickShuffleTracks.ifEmpty { rankedTracks.stableShuffleBy("quick-shuffle-fallback").artistDiverseTake(shortMixLength) }),
-        Mix("Rediscover", "Lower-play tracks with signals worth another shot.", rediscoverTracks),
-        Mix("Liked Radio", "A focused queue from your strongest favorites.", likedTracks.ifEmpty { rankedTracks.artistDiverseTake(24) }),
-        Mix("${strongestGenre ?: "Library"} Radio", "More from the sound you favor most.", genreTracks.ifEmpty { rankedTracks.artistDiverseTake(24) }),
-        Mix("${strongestMood ?: "Mood"} Flow", "A queue shaped by your current listening mood.", moodTracks.ifEmpty { rankedTracks.artistDiverseTake(24) })
+    )
+    val globalUsage = mutableMapOf<String, Int>()
+    val selectedByName = mutableMapOf<String, Mix>()
+    val selectionOrder = listOf(
+        "Rediscover",
+        "Liked Radio",
+        "Heavy Rotation",
+        "Long Listen Mix",
+        "Loud Flow",
+        "Weekly Discovery",
+        "Library Radio",
+        "Quick Shuffle"
+    )
+    definitions.sortedBy { definition -> selectionOrder.indexOf(definition.name).takeIf { it >= 0 } ?: selectionOrder.size }.forEach { definition ->
+        val candidates = library
+            .map { track -> ScoredTrack(track, definition.scorer(track)) }
+            .filter { it.score > -999f }
+            .sortedWith(compareByDescending<ScoredTrack> { it.score }.thenBy { it.track.dailyJitter("$daySeed:${definition.name}") })
+        val selected = candidates.selectDiverseTracks(definition.targetSize, globalUsage)
+        selected.tracks.forEach { track -> globalUsage[track.id] = (globalUsage[track.id] ?: 0) + 1 }
+        selectedByName[definition.name] = Mix(definition.name, definition.reason, selected.tracks, selected.note)
+    }
+    return definitions.mapNotNull { selectedByName[it.name] }
+}
+
+private data class SelectionResult(val tracks: List<Track>, val note: String? = null)
+
+private fun List<ScoredTrack>.selectDiverseTracks(
+    targetSize: Int,
+    globalUsage: Map<String, Int>
+): SelectionResult {
+    val desiredSize = minOf(targetSize, size)
+    val strict = chooseTracks(targetSize, globalUsage, albumLimit = 2, artistLimit = 2, artistSpacing = 5, enforceGlobal = true)
+    if (strict.size >= desiredSize) return SelectionResult(strict)
+    val relaxAlbum = chooseTracks(targetSize, globalUsage, albumLimit = Int.MAX_VALUE, artistLimit = 2, artistSpacing = 5, enforceGlobal = true)
+    if (relaxAlbum.size >= desiredSize) return SelectionResult(relaxAlbum, "Small library: relaxed album variety.")
+    val relaxArtist = chooseTracks(targetSize, globalUsage, albumLimit = Int.MAX_VALUE, artistLimit = Int.MAX_VALUE, artistSpacing = 0, enforceGlobal = true)
+    if (relaxArtist.size >= desiredSize) return SelectionResult(relaxArtist, "Small library: relaxed artist variety.")
+    val relaxGlobal = chooseTracks(targetSize, globalUsage, albumLimit = Int.MAX_VALUE, artistLimit = Int.MAX_VALUE, artistSpacing = 0, enforceGlobal = false)
+    return SelectionResult(
+        tracks = listOf(strict, relaxAlbum, relaxArtist, relaxGlobal)
+            .maxByOrNull { it.size }
+            ?.ifEmpty { map { it.track }.distinctBy { it.id }.take(targetSize) }
+            .orEmpty(),
+        note = when (listOf(strict, relaxAlbum, relaxArtist, relaxGlobal).maxByOrNull { it.size }) {
+            relaxGlobal -> "Small library: relaxed cross-mix overlap."
+            relaxArtist -> "Small library: relaxed artist variety."
+            relaxAlbum -> "Small library: relaxed album variety."
+            else -> null
+        }
     )
 }
+
+private fun List<ScoredTrack>.chooseTracks(
+    targetSize: Int,
+    globalUsage: Map<String, Int>,
+    albumLimit: Int,
+    artistLimit: Int,
+    artistSpacing: Int,
+    enforceGlobal: Boolean
+): List<Track> {
+    val result = mutableListOf<Track>()
+    val artistCounts = mutableMapOf<String, Int>()
+    val albumCounts = mutableMapOf<String, Int>()
+    forEach { scored ->
+        val track = scored.track
+        if (result.any { it.id == track.id }) return@forEach
+        if (enforceGlobal && (globalUsage[track.id] ?: 0) >= 2) return@forEach
+        val artist = track.artist.ifBlank { "Unknown Artist" }
+        val album = track.album.ifBlank { "Unknown Album" }
+        if ((artistCounts[artist] ?: 0) >= artistLimit) return@forEach
+        if ((albumCounts[album] ?: 0) >= albumLimit) return@forEach
+        if (artistSpacing > 0 && result.takeLast(artistSpacing).any { it.artist == artist }) return@forEach
+        result += track
+        artistCounts[artist] = (artistCounts[artist] ?: 0) + 1
+        albumCounts[album] = (albumCounts[album] ?: 0) + 1
+        if (result.size >= targetSize) return result
+    }
+    return result
+}
+
+private fun Map<String, TrackAudioFeatures>.forTrack(track: Track): TrackAudioFeatures =
+    this[track.id] ?: inferAudioFeatures(track)
+
+private fun Map<String, TrackAudioFeatures>.featureCenter(tracks: List<Track>): TrackAudioFeatures {
+    if (tracks.isEmpty()) return TrackAudioFeatures(100f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f)
+    val features = tracks.map { forTrack(it) }
+    return TrackAudioFeatures(
+        bpm = features.map { it.bpm }.average().toFloat(),
+        rmsEnergy = features.map { it.rmsEnergy }.average().toFloat(),
+        spectralCentroid = features.map { it.spectralCentroid }.average().toFloat(),
+        dynamicRange = features.map { it.dynamicRange }.average().toFloat(),
+        valence = features.map { it.valence }.average().toFloat(),
+        vocalPresence = features.map { it.vocalPresence }.average().toFloat(),
+        tempoStability = features.map { it.tempoStability }.average().toFloat()
+    )
+}
+
+private fun TrackAudioFeatures.distanceTo(other: TrackAudioFeatures): Float {
+    val bpmDistance = abs((bpm - other.bpm) / 130f)
+    return ((bpmDistance +
+        abs(rmsEnergy - other.rmsEnergy) +
+        abs(spectralCentroid - other.spectralCentroid) +
+        abs(dynamicRange - other.dynamicRange) +
+        abs(valence - other.valence) +
+        abs(vocalPresence - other.vocalPresence) +
+        abs(tempoStability - other.tempoStability)) / 7f).coerceIn(0f, 1f)
+}
+
+private fun Track.dailyJitter(seed: String): Float =
+    ("$seed:$id:$title:$artist").hashCode().absoluteValue.mod(10_000) / 100f
 
 private val vibeProfiles = listOf(
     VibeProfile("Chill", setOf("chill", "calm", "relax", "soft", "easy"), setOf("Calm", "Warm", "Late"), setOf("Ambient", "Indie", "Folk", "Jazz"), "Soft edges, low pressure, and songs that settle in."),
@@ -2979,7 +3946,10 @@ internal fun buildVibeMixes(
     query: String,
     liked: Map<String, Boolean>,
     longListens: Map<String, Int>,
-    localPlays: Map<String, Int>
+    localPlays: Map<String, Int>,
+    features: Map<String, TrackAudioFeatures> = tracks.associate { it.id to inferAudioFeatures(it) },
+    minQualifying: Int = 3,
+    daySeed: String = LocalDate.now().toString()
 ): List<Mix> {
     val normalized = query.trim().lowercase()
     val profiles = if (normalized.isBlank()) {
@@ -3002,9 +3972,25 @@ internal fun buildVibeMixes(
             )
         }
     }
-    return profiles.mapNotNull { profile ->
-        val ranked = rankTracksForVibe(tracks, profile, normalized, liked, longListens, localPlays).artistDiverseTake(30)
-        if (ranked.isEmpty()) null else Mix("${profile.name} Vibe", profile.reason, ranked)
+    return profiles.map { profile ->
+        val ranked = rankTracksForVibe(
+            tracks = deduplicateTracks(tracks),
+            profile = profile,
+            query = normalized,
+            liked = liked,
+            longListens = longListens,
+            localPlays = localPlays,
+            features = features,
+            daySeed = daySeed
+        ).artistDiverseTake(30)
+        val requiredCount = if (profile.moods.isEmpty() && profile.genres.isEmpty()) 1 else minQualifying
+        if (ranked.size < requiredCount && normalized.isBlank().not()) {
+            Mix("${profile.name} Vibe", "Not enough tracks fit this vibe yet.", emptyList(), "Need at least $minQualifying qualifying tracks.")
+        } else if (ranked.size < requiredCount) {
+            Mix("${profile.name} Vibe", profile.reason, emptyList(), "Not enough tracks fit this vibe yet.")
+        } else {
+            Mix("${profile.name} Vibe", profile.reason, ranked)
+        }
     }
 }
 
@@ -3014,28 +4000,68 @@ internal fun rankTracksForVibe(
     query: String,
     liked: Map<String, Boolean>,
     longListens: Map<String, Int>,
-    localPlays: Map<String, Int>
+    localPlays: Map<String, Int>,
+    features: Map<String, TrackAudioFeatures> = tracks.associate { it.id to inferAudioFeatures(it) },
+    daySeed: String = LocalDate.now().toString()
 ): List<Track> =
-    tracks.sortedByDescending { track ->
+    tracks.filter { track ->
         val text = "${track.title} ${track.artist} ${track.album} ${track.genre} ${track.mood}".lowercase()
-        val profileBoost =
-            (if (track.mood in profile.moods) 48f else 0f) +
-                (if (track.genre in profile.genres) 34f else 0f) +
-                (if (profile.aliases.any { it in text }) 18f else 0f)
+        (query.isNotBlank() && profile.aliases.size == 1 && profile.moods.isEmpty() && profile.genres.isEmpty() && query in text) ||
+            qualifiesForVibe(profile.name, features.forTrack(track))
+    }.sortedByDescending { track ->
+        val text = "${track.title} ${track.artist} ${track.album} ${track.genre} ${track.mood}".lowercase()
+        val feature = features.forTrack(track)
+        val profileBoost = vibeFitScore(profile.name, feature) * 100f
         val queryBoost = if (query.isNotBlank() && query in text) 90f else 0f
-        profileBoost + queryBoost + recommendationScore(
-            track = track,
-            liked = liked[track.id] == true,
-            longListens = longListens[track.id] ?: 0,
-            skips = 0,
-            localPlays = localPlays[track.id] ?: 0
-        )
+        val lightPersonalTieBreak =
+            (if (liked[track.id] == true || track.liked) 4f else 0f) +
+                ((longListens[track.id] ?: 0) * 0.5f) +
+                ((localPlays[track.id] ?: 0) * 0.25f)
+        profileBoost + queryBoost + lightPersonalTieBreak + track.dailyJitter("$daySeed:${profile.name}") * 0.01f
     }
+
+private fun qualifiesForVibe(name: String, feature: TrackAudioFeatures): Boolean =
+    when (name.lowercase()) {
+        "chill" -> feature.rmsEnergy <= 0.48f && feature.bpm in 70f..112f && feature.dynamicRange <= 0.48f
+        "hype", "workout" -> feature.rmsEnergy >= 0.64f && feature.bpm >= 112f && feature.spectralCentroid >= 0.55f
+        "angry" -> feature.rmsEnergy >= 0.68f && feature.dynamicRange >= 0.62f && feature.spectralCentroid <= 0.52f
+        "sad", "rainy" -> feature.rmsEnergy <= 0.5f && feature.spectralCentroid <= 0.46f && feature.bpm <= 98f
+        "focus" -> feature.dynamicRange <= 0.42f && feature.vocalPresence <= 0.48f && feature.tempoStability >= 0.68f
+        "late night" -> feature.rmsEnergy in 0.34f..0.68f && feature.spectralCentroid <= 0.52f && feature.bpm <= 108f
+        "happy" -> feature.valence >= 0.62f && feature.rmsEnergy >= 0.45f
+        "nostalgic" -> feature.valence in 0.36f..0.72f && feature.rmsEnergy in 0.32f..0.68f
+        else -> true
+    }
+
+private fun vibeFitScore(name: String, feature: TrackAudioFeatures): Float =
+    when (name.lowercase()) {
+        "chill" -> feature.closeness(92f, 0.3f, 0.36f, 0.32f, 0.52f)
+        "hype", "workout" -> feature.closeness(134f, 0.84f, 0.76f, 0.52f, 0.7f)
+        "angry" -> feature.closeness(126f, 0.86f, 0.34f, 0.82f, 0.18f)
+        "sad", "rainy" -> feature.closeness(78f, 0.28f, 0.3f, 0.38f, 0.24f)
+        "focus" -> feature.closeness(100f, 0.42f, 0.48f, 0.25f, 0.5f) + feature.tempoStability * 0.25f - feature.vocalPresence * 0.18f
+        "late night" -> feature.closeness(92f, 0.5f, 0.34f, 0.42f, 0.42f)
+        "happy" -> feature.closeness(112f, 0.62f, 0.68f, 0.46f, 0.78f)
+        "nostalgic" -> feature.closeness(96f, 0.48f, 0.45f, 0.5f, 0.52f)
+        else -> 0.5f
+    }
+
+private fun TrackAudioFeatures.closeness(targetBpm: Float, targetEnergy: Float, targetCentroid: Float, targetDynamicRange: Float, targetValence: Float): Float {
+    val distance = (
+        abs((bpm - targetBpm) / 130f) +
+            abs(rmsEnergy - targetEnergy) +
+            abs(spectralCentroid - targetCentroid) +
+            abs(dynamicRange - targetDynamicRange) +
+            abs(valence - targetValence)
+        ) / 5f
+    return (1f - distance).coerceIn(0f, 1f)
+}
 
 internal fun filterTracks(tracks: List<Track>, query: String): List<Track> {
     val normalized = query.trim().lowercase()
-    if (normalized.isBlank()) return tracks
-    return tracks.filter { track ->
+    val canonicalTracks = deduplicateTracks(tracks)
+    if (normalized.isBlank()) return canonicalTracks
+    return canonicalTracks.filter { track ->
         listOf(track.title, track.artist, track.album, track.genre, track.mood)
             .any { it.lowercase().contains(normalized) }
     }
@@ -3051,16 +4077,16 @@ internal fun discoveryTracks(
 ): List<Track> =
     when (filter) {
         DiscoveryFilter.LongListens ->
-            tracks.sortedByDescending { it.durationSec + ((longListens[it.id] ?: 0) * 120) }
+            deduplicateTracks(tracks).sortedByDescending { it.durationSec + ((longListens[it.id] ?: 0) * 120) }
         DiscoveryFilter.Liked ->
-            tracks.filter { liked[it.id] == true || it.liked }
+            deduplicateTracks(tracks).filter { liked[it.id] == true || it.liked }
         DiscoveryFilter.LowSkips ->
-            tracks.sortedWith(compareBy<Track> { skips[it.id] ?: it.skipped }.thenByDescending { it.completion })
+            deduplicateTracks(tracks).sortedWith(compareBy<Track> { skips[it.id] ?: it.skipped }.thenByDescending { it.completion })
         DiscoveryFilter.SimilarMood ->
-            tracks.filter { it.mood == currentTrack.mood && it.id != currentTrack.id }
-                .ifEmpty { tracks.filter { it.genre == currentTrack.genre && it.id != currentTrack.id } }
+            deduplicateTracks(tracks).filter { it.mood == currentTrack.mood && it.id != currentTrack.id }
+                .ifEmpty { deduplicateTracks(tracks).filter { it.genre == currentTrack.genre && it.id != currentTrack.id } }
         DiscoveryFilter.Rediscover ->
-            tracks.filter { (liked[it.id] != true) && (longListens[it.id] ?: 0) == 0 }
+            deduplicateTracks(tracks).filter { (liked[it.id] != true) && (longListens[it.id] ?: 0) == 0 }
                 .sortedWith(compareBy<Track> { it.plays }.thenByDescending { it.completion })
     }
 
@@ -3072,7 +4098,8 @@ internal fun buildTrackRadio(
     skips: Map<String, Int>,
     localPlays: Map<String, Int>
 ): List<Track> {
-    val ranked = tracks
+    val library = deduplicateTracks(tracks)
+    val ranked = library
         .filterNot { it.id == seed.id }
         .sortedByDescending { track ->
             val similarityBoost =
@@ -3087,7 +4114,7 @@ internal fun buildTrackRadio(
                 localPlays = localPlays[track.id] ?: 0
             )
     }
-    return (listOf(seed) + ranked.artistDiverseTake(49)).distinctBy { it.id }.take(50)
+    return deduplicateTracks(listOf(seed) + ranked.artistDiverseTake(49)).take(50)
 }
 
 internal fun buildGuestDjQueue(
@@ -3101,7 +4128,8 @@ internal fun buildGuestDjQueue(
     recentlyPlayedIds: List<String>
 ): List<Track> {
     val recentIds = recentlyPlayedIds.take(12).toSet()
-    val ranked = tracks.sortedByDescending { track ->
+    val library = deduplicateTracks(tracks)
+    val ranked = library.sortedByDescending { track ->
         val base = recommendationScore(
             track = track,
             liked = liked[track.id] == true,
@@ -3224,7 +4252,8 @@ internal fun buildAutoplayQueue(
     recentlyPlayedIds: List<String>
 ): List<Track> {
     val recentPenaltyIds = recentlyPlayedIds.take(8).toSet()
-    val ranked = tracks
+    val library = deduplicateTracks(tracks)
+    val ranked = library
         .filterNot { it.id == seed.id }
         .sortedByDescending { track ->
             val continuity =
@@ -3240,7 +4269,7 @@ internal fun buildAutoplayQueue(
                 localPlays = localPlays[track.id] ?: 0
             )
         }
-    return ranked.ifEmpty { tracks.filterNot { it.id == seed.id } }.artistDiverseTake(50)
+    return ranked.ifEmpty { library.filterNot { it.id == seed.id } }.artistDiverseTake(50)
 }
 
 private fun List<Track>.artistDiverseTake(maxCount: Int): List<Track> {
@@ -3302,12 +4331,14 @@ internal fun previousQueueIndex(currentIndex: Int, queueSize: Int, repeatEnabled
 internal fun isQueueEnd(currentIndex: Int, queueSize: Int, repeatEnabled: Boolean): Boolean =
     queueSize <= 1 && !repeatEnabled || currentIndex >= queueSize - 1 && !repeatEnabled
 
-private fun moodFromGenre(genre: String): String =
-    when (genre.lowercase()) {
-        "ambient", "classical", "jazz" -> "Calm"
-        "electronic", "synth", "dance" -> "Drive"
-        "rock", "metal", "punk" -> "Loud"
-        "folk", "indie" -> "Warm"
+private fun moodFromGenre(genre: String, tags: Set<String> = emptySet()): String =
+    when {
+        tags.any { it.equals("Loud", ignoreCase = true) } -> "Loud"
+        tags.any { it.equals("Drive", ignoreCase = true) } -> "Drive"
+        genre.lowercase() in setOf("ambient", "classical", "jazz") -> "Calm"
+        genre.lowercase() in setOf("electronic", "synth", "dance") -> "Drive"
+        genre.lowercase() in setOf("rock", "metal", "punk") -> "Loud"
+        genre.lowercase() in setOf("folk", "indie") -> "Warm"
         else -> "Library"
     }
 
@@ -3365,6 +4396,26 @@ internal fun List<Track>.toTrackCacheString(): String {
                 .put("skipped", track.skipped)
                 .put("liked", track.liked)
                 .put("imageUrl", track.imageUrl)
+                .put("bitrate", track.bitrate)
+                .put("filename", track.filename)
+                .put("tags", JSONArray().also { tags -> track.tags.forEach(tags::put) })
+                .put(
+                    "alternates",
+                    JSONArray().also { alternates ->
+                        track.alternates.forEach { alternate ->
+                            alternates.put(
+                                JSONObject()
+                                    .put("id", alternate.id)
+                                    .put("title", alternate.title)
+                                    .put("artist", alternate.artist)
+                                    .put("album", alternate.album)
+                                    .put("durationSec", alternate.durationSec)
+                                    .put("bitrate", alternate.bitrate)
+                                    .put("imageUrl", alternate.imageUrl)
+                            )
+                        }
+                    }
+                )
         )
     }
     return items.toString()
@@ -3377,17 +4428,36 @@ internal fun String.toTrackList(): List<Track> =
             val item = items.optJSONObject(index) ?: return@mapNotNull null
             Track(
                 id = item.optString("id").takeIf { it.isNotBlank() } ?: return@mapNotNull null,
-                title = item.optString("title", "Untitled"),
-                artist = item.optString("artist", "Unknown Artist"),
-                album = item.optString("album", "Unknown Album"),
-                genre = item.optString("genre", "Library"),
+                title = item.optString("title", "Untitled").removePrefix("MID -").trim().ifBlank { "Untitled" },
+                artist = item.optString("artist").cleanUnknown("Unknown Artist"),
+                album = item.optString("album").cleanUnknown("Unknown Album"),
+                genre = item.optString("genre").takeUnless { it.lowercase() in internalGenreLabels }.orEmpty(),
                 mood = item.optString("mood", "Library"),
                 durationSec = item.optInt("durationSec", 1).coerceAtLeast(1),
                 plays = item.optInt("plays", 0),
                 completion = item.optDouble("completion", 0.0).toFloat().coerceIn(0f, 1f),
                 skipped = item.optInt("skipped", 0),
                 liked = item.optBoolean("liked", false),
-                imageUrl = item.optString("imageUrl").takeIf { it.isNotBlank() && it != "null" }
+                imageUrl = item.optString("imageUrl").takeIf { it.isNotBlank() && it != "null" },
+                bitrate = item.optInt("bitrate", 0),
+                tags = item.optJSONArray("tags")?.let { tags ->
+                    (0 until tags.length()).mapNotNull { tagIndex -> tags.optString(tagIndex).takeIf { it.isNotBlank() } }.toSet()
+                }.orEmpty(),
+                filename = item.optString("filename").takeIf { it.isNotBlank() && it != "null" },
+                alternates = item.optJSONArray("alternates")?.let { alternates ->
+                    (0 until alternates.length()).mapNotNull { alternateIndex ->
+                        val alternate = alternates.optJSONObject(alternateIndex) ?: return@mapNotNull null
+                        TrackAlternate(
+                            id = alternate.optString("id").takeIf { it.isNotBlank() } ?: return@mapNotNull null,
+                            title = alternate.optString("title", "Untitled"),
+                            artist = alternate.optString("artist"),
+                            album = alternate.optString("album"),
+                            durationSec = alternate.optInt("durationSec", 1).coerceAtLeast(1),
+                            bitrate = alternate.optInt("bitrate", 0),
+                            imageUrl = alternate.optString("imageUrl").takeIf { it.isNotBlank() && it != "null" }
+                        )
+                    }
+                }.orEmpty()
             )
         }
     }.getOrDefault(emptyList())
@@ -3420,6 +4490,41 @@ internal fun String.toPlaylistList(): List<JellyfinPlaylist> =
         }
     }.getOrDefault(emptyList())
 
+internal fun Map<String, TrackAudioFeatures>.toAudioFeatureCacheString(): String {
+    val root = JSONObject()
+    forEach { (trackId, feature) ->
+        root.put(
+            trackId,
+            JSONObject()
+                .put("bpm", feature.bpm.toDouble())
+                .put("rmsEnergy", feature.rmsEnergy.toDouble())
+                .put("spectralCentroid", feature.spectralCentroid.toDouble())
+                .put("dynamicRange", feature.dynamicRange.toDouble())
+                .put("valence", feature.valence.toDouble())
+                .put("vocalPresence", feature.vocalPresence.toDouble())
+                .put("tempoStability", feature.tempoStability.toDouble())
+        )
+    }
+    return root.toString()
+}
+
+internal fun String.toAudioFeatureMap(): Map<String, TrackAudioFeatures> =
+    runCatching {
+        val root = JSONObject(this)
+        root.keys().asSequence().mapNotNull { trackId ->
+            val item = root.optJSONObject(trackId) ?: return@mapNotNull null
+            trackId to TrackAudioFeatures(
+                bpm = item.optDouble("bpm", 100.0).toFloat().coerceIn(50f, 180f),
+                rmsEnergy = item.optDouble("rmsEnergy", 0.5).toFloat().coerceIn(0f, 1f),
+                spectralCentroid = item.optDouble("spectralCentroid", 0.5).toFloat().coerceIn(0f, 1f),
+                dynamicRange = item.optDouble("dynamicRange", 0.5).toFloat().coerceIn(0f, 1f),
+                valence = item.optDouble("valence", 0.5).toFloat().coerceIn(0f, 1f),
+                vocalPresence = item.optDouble("vocalPresence", 0.5).toFloat().coerceIn(0f, 1f),
+                tempoStability = item.optDouble("tempoStability", 0.5).toFloat().coerceIn(0f, 1f)
+            )
+        }.toMap()
+    }.getOrDefault(emptyMap())
+
 internal fun JSONObject.hasPrimaryImage(): Boolean =
     optJSONObject("ImageTags")?.optString("Primary")?.isNotBlank() == true
 
@@ -3427,6 +4532,15 @@ internal inline fun <reified T : Enum<T>> String?.enumValueOrDefault(default: T)
     this?.let { value ->
         enumValues<T>().firstOrNull { it.name == value }
     } ?: default
+
+internal fun String?.toTabOrDefault(default: Tab): Tab =
+    when (this) {
+        "Vibe", "Playlists", "Mixes" -> Tab.Mixes
+        "Discover" -> Tab.Discover
+        "Library" -> Tab.Library
+        "Home" -> Tab.Home
+        else -> default
+    }
 
 internal fun ByteArray.toVisualizerBands(bandCount: Int = 28): List<Float> {
     if (isEmpty() || bandCount <= 0) return emptyList()
