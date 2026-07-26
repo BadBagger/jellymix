@@ -54,6 +54,7 @@ Done:
 - A real Settings entry point is available from the main tab header gear. It opens a bottom sheet with Jellyfin reload/sign-out actions, theme/accent controls, visualizer diagnostics, and live visualizer permission access so settings remain reachable after the onboarding connection card hides.
 - Settings now includes editable Jellyfin server URL, username, password, Reconnect, Reload, and Sign out controls. Library no longer renders demo/sample tracks or "Showing your full music set" while a saved Jellyfin session has not loaded a real library.
 - Jellyfin library reload now checks server reachability separately, fetches audio items in 500-item pages instead of one giant request, and treats playlist/count loading as best-effort so a slow playlist endpoint does not block track access.
+- Library tab now virtualizes large Jellyfin libraries more aggressively: Tracks renders an initial 150-row window with Show more batches, saved discovery filtering is capped to a small source window, and full-library summary/actions memoize dedup work to avoid 29k-track recomposition stalls.
 - JellyMix now defaults to dark theme with a teal Jelly accent, uses a defined 28/20/17/15/13 typography scale, stronger section/card hierarchy, low-emphasis secondary actions, generated gradient mix covers, initials-based missing-art fallbacks, denser adaptive track rows, and larger accessible row icon targets.
 - JellyMix visual affordances now use one accent model: teal for primary actions and active nav, desaturated teal tint for selected nav/chips, and red reserved for actual errors. Mix/Vibe card Play buttons are filled primary actions while Shuffle stays outlined, small-library mix notes render as neutral info rows, row/home/player like affordances consistently use hearts, phone subtitles render as one-line artist-first rows, the static JellyMix app bar was removed, and generated initials only appear on missing-art gradients with collision-aware short forms.
 - Library tab layout now orders search, browse segment, compact stats, Play/Shuffle actions, and list content so the actions apply to the selected browse segment. The stats panel renders Artists, Albums, and Tracks in one compact card without reserved blank space, and the segment row scrolls horizontally so Genres does not clip.
@@ -117,6 +118,7 @@ Published:
 - Crossfade/settings release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.26-crossfade-settings`
 - Settings/library fix release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.27-settings-library-fix`
 - Connection resilience release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.28-connection-resilience`
+- Large-library lag fix release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.29-large-library-lag`
 - Server reachability from the Windows workspace was confirmed for `http://www.badgerflix.win/System/Info/Public` and `https://www.badgerflix.win/System/Info/Public`; both returned BadgerFlix `10.11.11`. Phone-side library loading still needs verification.
 
 ## Immediate Next Blocker

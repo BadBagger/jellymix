@@ -104,6 +104,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -161,6 +162,9 @@ private const val DefaultJarvisPrompt = "Tell me what you want to hear. I can go
 private const val CrossfadeDurationMs = 2_800L
 private const val CrossfadeTriggerRemainingMs = 3_400L
 private const val JellyfinPageSize = 500
+private const val LibraryInitialVisibleTracks = 150
+private const val LibraryVisibleTrackIncrement = 150
+private const val LibraryDiscoverySourceLimit = 600
 
 class MainActivity : ComponentActivity() {
     private val viewModel: JellyMixViewModel by viewModels()
@@ -1758,9 +1762,13 @@ private fun JellyMixApp(
     var showQueueSheet by remember { mutableStateOf(false) }
     var showSettingsSheet by remember { mutableStateOf(false) }
     var showMiniPlayer by remember { mutableStateOf(true) }
+    var libraryVisibleTrackLimit by remember { mutableIntStateOf(LibraryInitialVisibleTracks) }
     val state = viewModel.state
     LaunchedEffect(state.currentTrack.id) {
         showMiniPlayer = true
+    }
+    LaunchedEffect(state.selectedTab, state.libraryBrowseMode, state.searchQuery) {
+        libraryVisibleTrackLimit = LibraryInitialVisibleTracks
     }
     val homeOnly = state.selectedTab == Tab.Home && !showNowPlaying
     val needsFullMixes = showNowPlaying || state.selectedTab == Tab.Mixes
@@ -1787,13 +1795,19 @@ private fun JellyMixApp(
     val canShowLibraryTracks = state.isConnected && state.tracks.none { it.id.startsWith("sample-") }
     val libraryTracks = remember(state.selectedTab, showNowPlaying, canShowLibraryTracks, state.tracks, state.searchQuery) {
         if (state.selectedTab == Tab.Library && !showNowPlaying && canShowLibraryTracks) {
-            filterTracks(state.tracks, state.searchQuery)
+            if (state.searchQuery.isBlank()) state.tracks else filterTracks(state.tracks, state.searchQuery)
         } else {
             emptyList()
         }
     }
-    val libraryBrowseData = remember(state.libraryBrowseMode, libraryTracks) {
-        buildLibraryBrowseData(state.libraryBrowseMode, libraryTracks)
+    val visibleLibraryTracks = remember(libraryTracks, libraryVisibleTrackLimit) {
+        libraryTracks.take(libraryVisibleTrackLimit)
+    }
+    val libraryBrowseData = remember(state.libraryBrowseMode, libraryTracks, visibleLibraryTracks) {
+        buildLibraryBrowseData(
+            mode = state.libraryBrowseMode,
+            tracks = if (state.libraryBrowseMode == LibraryBrowseMode.Tracks) visibleLibraryTracks else libraryTracks
+        )
     }
     val needsDiscoveryTracks = state.selectedTab == Tab.Library && !showNowPlaying
     val discoveryTracks = remember(
@@ -1807,13 +1821,13 @@ private fun JellyMixApp(
     ) {
         if (needsDiscoveryTracks) {
             discoveryTracks(
-                tracks = libraryTracks,
+                tracks = libraryTracks.take(LibraryDiscoverySourceLimit),
                 filter = state.discoveryFilter,
                 liked = state.liked,
                 skips = state.skips,
                 longListens = state.longListens,
                 currentTrack = state.currentTrack
-            )
+            ).take(LibraryInitialVisibleTracks)
         } else {
             emptyList()
         }
@@ -2032,6 +2046,12 @@ private fun JellyMixApp(
                             libraryBrowseContent(
                                 data = libraryBrowseData,
                                 liked = state.liked,
+                                totalTrackCount = libraryTracks.size,
+                                visibleTrackCount = visibleLibraryTracks.size,
+                                onShowMoreTracks = {
+                                    libraryVisibleTrackLimit = (libraryVisibleTrackLimit + LibraryVisibleTrackIncrement)
+                                        .coerceAtMost(libraryTracks.size)
+                                },
                                 onTrackSelected = viewModel::selectTrack,
                                 onQueueSelected = viewModel::startQueue
                             )
@@ -3439,12 +3459,24 @@ private fun buildLibraryBrowseData(mode: LibraryBrowseMode, tracks: List<Track>)
 private fun LazyListScope.libraryBrowseContent(
     data: LibraryBrowseData,
     liked: Map<String, Boolean>,
+    totalTrackCount: Int,
+    visibleTrackCount: Int,
+    onShowMoreTracks: () -> Unit,
     onTrackSelected: (Track) -> Unit,
     onQueueSelected: (String, List<Track>) -> Unit
 ) {
     when (data.mode) {
         LibraryBrowseMode.Tracks -> {
             trackRowsSection("Tracks", data.tracks, liked, keyPrefix = "library", onTrackSelected = onTrackSelected)
+            if (visibleTrackCount < totalTrackCount) {
+                item(key = "library-show-more", contentType = "show-more") {
+                    ShowMoreTracksCard(
+                        visibleCount = visibleTrackCount,
+                        totalCount = totalTrackCount,
+                        onShowMore = onShowMoreTracks
+                    )
+                }
+            }
         }
         LibraryBrowseMode.Artists -> {
             items(data.artists, key = { it.first }, contentType = { "library-group" }) { (artist, artistTracks) ->
@@ -3481,6 +3513,27 @@ private fun LazyListScope.libraryBrowseContent(
                     onQueueSelected = { onQueueSelected("$genre radio", genreTracks) },
                     onTrackSelected = onTrackSelected
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ShowMoreTracksCard(visibleCount: Int, totalCount: Int, onShowMore: () -> Unit) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(
+                "Showing $visibleCount of $totalCount tracks",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                "Library loads more rows in batches so big Jellyfin libraries stay smooth.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OutlinedButton(onClick = onShowMore, modifier = Modifier.fillMaxWidth()) {
+                Text("Show ${LibraryVisibleTrackIncrement.coerceAtMost(totalCount - visibleCount)} more")
             }
         }
     }
@@ -3824,7 +3877,7 @@ private fun LibraryActions(
     onQueueSelected: (String, List<Track>) -> Unit,
     onShuffledQueueSelected: (String, List<Track>) -> Unit
 ) {
-    val canonical = deduplicateTracks(tracks)
+    val canonical = remember(tracks) { deduplicateTracks(tracks) }
     val label = mode.label
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Row(
@@ -3894,12 +3947,14 @@ private fun SelectedPlaylistSection(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LibrarySummary(tracks: List<Track>, rawTrackCount: Int) {
-    val canonicalTracks = deduplicateTracks(tracks)
-    val values = listOf(
-        "Artists" to canonicalTracks.map { it.artist }.filter { it.isNotBlank() }.distinct().size.toString(),
-        "Albums" to canonicalTracks.map { it.album }.filter { it.isNotBlank() }.distinct().size.toString(),
-        "Tracks" to canonicalTracks.size.toString()
-    )
+    val canonicalTracks = remember(tracks) { deduplicateTracks(tracks) }
+    val values = remember(canonicalTracks) {
+        listOf(
+            "Artists" to canonicalTracks.map { it.artist }.filter { it.isNotBlank() }.distinct().size.toString(),
+            "Albums" to canonicalTracks.map { it.album }.filter { it.isNotBlank() }.distinct().size.toString(),
+            "Tracks" to canonicalTracks.size.toString()
+        )
+    }
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
