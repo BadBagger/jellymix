@@ -48,7 +48,7 @@ fun FeedbackTunnelVisualizer(
         update = { view ->
             renderer.update(frame, palette, isPlaying, intensity, sensitivity, fullscreen, mode, debugOverlay, onStats)
             view.renderMode = if (isPlaying) GLSurfaceView.RENDERMODE_CONTINUOUSLY else GLSurfaceView.RENDERMODE_WHEN_DIRTY
-            if (isPlaying) view.onResume() else view.requestRender()
+            if (!isPlaying) view.requestRender()
         }
     )
     LaunchedEffect(frame, palette, isPlaying, intensity, sensitivity, fullscreen, mode, debugOverlay) {
@@ -114,6 +114,7 @@ class FeedbackTunnelRenderer : GLSurfaceView.Renderer {
     private var frameNumber = 0
     private var direction = 1f
     private var stopped = false
+    private var lastRenderedNs = 0L
     private val safetyMonitor = FeedbackSafetyMonitor()
     private var lastStatsNs = 0L
     private var lastStatsFrame = 0
@@ -176,14 +177,19 @@ class FeedbackTunnelRenderer : GLSurfaceView.Renderer {
     override fun onSurfaceChanged(gl: GL10?, surfaceWidth: Int, surfaceHeight: Int) {
         width = surfaceWidth.coerceAtLeast(1)
         height = surfaceHeight.coerceAtLeast(1)
-        bufferWidth = max(1, width / 2)
-        bufferHeight = max(1, height / 2)
+        val scale = if (fullscreen) 4 else 2
+        bufferWidth = max(1, width / scale)
+        bufferHeight = max(1, height / scale)
         createBuffers()
     }
 
     override fun onDrawFrame(gl: GL10?) {
         if (stopped || width == 0 || height == 0 || feedbackProgram == 0) return
         if (!isPlaying && frameNumber > 2) return
+        val frameTimeNs = if (fullscreen) 16_666_667L else 33_333_333L
+        val drawNs = System.nanoTime()
+        if (lastRenderedNs != 0L && drawNs - lastRenderedNs < frameTimeNs) return
+        lastRenderedNs = drawNs
         val now = (System.nanoTime() - startNs) / 1_000_000_000f
         val targetIndex = 1 - sourceIndex
         if (beat) direction *= -1f

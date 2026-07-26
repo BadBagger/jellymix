@@ -239,17 +239,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         run {
             val token = prefs.getString("token", "").orEmpty()
             val userId = prefs.getString("userId", "").orEmpty()
-            val cachedLibrary = readCachedLibrary()
             val hasSavedSession = token.isNotBlank() && userId.isNotBlank()
-            val initialTracks = if (hasSavedSession) cachedLibrary.tracks.ifEmpty { sampleTracks } else sampleTracks
-            val initialFeatures = readAudioFeatureCache(initialTracks)
-            val savedQueueIds = prefs.getString("queueIds", null)?.split(",")?.filter { it.isNotBlank() }.orEmpty()
-            val savedQueue = savedQueueIds.mapNotNull { id -> initialTracks.firstOrNull { it.id == id } }
-            val savedCurrentTrackId = prefs.getString("currentTrackId", null)
-            val initialCurrent = initialTracks.firstOrNull { it.id == savedCurrentTrackId }
-                ?: savedQueue.firstOrNull()
-                ?: initialTracks.first()
-            val hasCachedSession = hasSavedSession && cachedLibrary.tracks.isNotEmpty()
             JellyMixState(
                 serverUrl = prefs.getString("serverUrl", "http://jellyfin.local:8096").orEmpty(),
                 username = prefs.getString("username", "").orEmpty(),
@@ -262,23 +252,23 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 selectedTab = prefs.getString("selectedTab", null).toTabOrDefault(Tab.Home),
                 mixesSegment = prefs.getString("mixesSegment", null).enumValueOrDefault(MixesSegment.Mixes),
                 libraryBrowseMode = prefs.getString("libraryBrowseMode", null).enumValueOrDefault(LibraryBrowseMode.Tracks),
-                tracks = initialTracks,
-                rawTrackCount = prefs.getInt("rawTrackCount", initialTracks.size),
-                audioFeatures = initialFeatures,
-                currentTrack = initialCurrent,
-                queue = savedQueue,
-                queueIndex = savedQueue.indexOfFirst { it.id == initialCurrent.id }.coerceAtLeast(0),
+                tracks = sampleTracks,
+                rawTrackCount = sampleTracks.size,
+                audioFeatures = sampleTracks.associate { it.id to inferAudioFeatures(it) },
+                currentTrack = sampleTracks.first(),
+                queue = emptyList(),
+                queueIndex = 0,
                 queueTitle = prefs.getString("queueTitle", "Discovery queue").orEmpty().ifBlank { "Discovery queue" },
                 djMode = prefs.getString("djMode", null).enumValueOrDefault(GuestDjMode.Flow),
-                jellyfinPlaylists = cachedLibrary.playlists,
+                jellyfinPlaylists = emptyList(),
                 selectedPlaylistTracks = emptyList(),
-                liked = prefs.getString("liked", null)?.toBooleanMap() ?: initialTracks.associate { it.id to it.liked },
-                skips = prefs.getString("skips", null)?.toIntMap() ?: initialTracks.associate { it.id to it.skipped },
-                longListens = prefs.getString("longListens", null)?.toIntMap() ?: initialTracks.associate { it.id to 0 },
-                localPlays = prefs.getString("localPlays", null)?.toIntMap() ?: initialTracks.associate { it.id to 0 },
+                liked = prefs.getString("liked", null)?.toBooleanMap().orEmpty(),
+                skips = prefs.getString("skips", null)?.toIntMap().orEmpty(),
+                longListens = prefs.getString("longListens", null)?.toIntMap().orEmpty(),
+                localPlays = prefs.getString("localPlays", null)?.toIntMap().orEmpty(),
                 recentTrackIds = prefs.getString("recentTrackIds", null)?.split(",")?.filter { it.isNotBlank() }.orEmpty(),
-                libraryLoaded = hasCachedSession,
-                status = if (hasCachedSession) "Ready from saved library. Refreshing Jellyfin..." else "Ready. Connect to Jellyfin or explore demo mixes."
+                libraryLoaded = false,
+                status = if (hasSavedSession) "Loading saved Jellyfin library..." else "Ready. Connect to Jellyfin or explore demo mixes."
             )
         }
     )
@@ -287,9 +277,50 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     init {
         WidgetPlaybackBridge.register(widgetPlaybackController)
         if (state.token.isNotBlank() && state.userId.isNotBlank()) {
-            loadLibrary(backgroundRefresh = state.libraryLoaded)
+            loadSavedLibraryThenRefresh()
         }
         preloadCurrentTrack()
+    }
+
+    private fun loadSavedLibraryThenRefresh() {
+        viewModelScope.launch {
+            val cached = withContext(Dispatchers.IO) { readCachedLibrary() }
+            if (cached.tracks.isNotEmpty()) {
+                val savedQueueIds = prefs.getString("queueIds", null)?.split(",")?.filter { it.isNotBlank() }.orEmpty()
+                val savedQueue = savedQueueIds.mapNotNull { id -> cached.tracks.firstOrNull { it.id == id } }
+                val savedCurrentTrackId = prefs.getString("currentTrackId", null)
+                val current = cached.tracks.firstOrNull { it.id == savedCurrentTrackId }
+                    ?: savedQueue.firstOrNull()
+                    ?: cached.tracks.first()
+                val cachedTrackIds = cached.tracks.map { it.id }.toHashSet()
+                val features = withContext(Dispatchers.IO) { readAudioFeatureCache(cached.tracks) }
+                state = state.copy(
+                    tracks = cached.tracks,
+                    rawTrackCount = cached.rawTrackCount.takeIf { it > 0 } ?: cached.tracks.size,
+                    audioFeatures = features,
+                    currentTrack = current,
+                    queue = savedQueue,
+                    queueIndex = savedQueue.indexOfFirst { it.id == current.id }.coerceAtLeast(0),
+                    jellyfinPlaylists = cached.playlists,
+                    liked = state.liked.filterKeys { it in cachedTrackIds },
+                    skips = state.skips.filterKeys { it in cachedTrackIds },
+                    longListens = state.longListens.filterKeys { it in cachedTrackIds },
+                    localPlays = state.localPlays.filterKeys { it in cachedTrackIds },
+                    recentTrackIds = state.recentTrackIds.filter { it in cachedTrackIds },
+                    libraryLoaded = true,
+                    status = "Ready from saved library. Refreshing Jellyfin..."
+                )
+                preloadCurrentTrack()
+                viewModelScope.launch {
+                    delay(8_000)
+                    if (state.hasSession && state.libraryLoaded) {
+                        loadLibrary(backgroundRefresh = true)
+                    }
+                }
+            } else {
+                loadLibrary(backgroundRefresh = false)
+            }
+        }
     }
 
     fun setServerUrl(value: String) {
@@ -442,32 +473,45 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                     )
                 }
             }.onSuccess { library ->
-                val remoteTracks = library.tracks
-                val tracks = remoteTracks.ifEmpty { sampleTracks }
-                val features = readAudioFeatureCache(tracks)
-                val mergedLiked = tracks.associate { it.id to (state.liked[it.id] ?: it.liked) }
-                val mergedSkips = tracks.associate { it.id to (state.skips[it.id] ?: it.skipped) }
-                val mergedLong = tracks.associate { it.id to (state.longListens[it.id] ?: 0) }
-                val mergedPlays = tracks.associate { it.id to (state.localPlays[it.id] ?: 0) }
+                val currentLiked = state.liked
+                val currentSkips = state.skips
+                val currentLongListens = state.longListens
+                val currentLocalPlays = state.localPlays
+                val currentRecentIds = state.recentTrackIds
+                val prepared = withContext(Dispatchers.IO) {
+                    val tracks = library.tracks.ifEmpty { sampleTracks }
+                    val trackIds = tracks.map { it.id }.toHashSet()
+                    PreparedLibraryState(
+                        tracks = tracks,
+                        features = readAudioFeatureCache(tracks),
+                        liked = currentLiked.filterKeys { it in trackIds },
+                        skips = currentSkips.filterKeys { it in trackIds },
+                        longListens = currentLongListens.filterKeys { it in trackIds },
+                        localPlays = currentLocalPlays.filterKeys { it in trackIds },
+                        recentTrackIds = currentRecentIds.filter { it in trackIds }
+                    )
+                }
                 state = state.copy(
                     isLoading = false,
                     libraryLoaded = true,
-                    tracks = tracks,
-                    rawTrackCount = library.rawTrackCount.takeIf { it > 0 } ?: tracks.sumOf { 1 + it.alternates.size },
-                    audioFeatures = features,
-                    currentTrack = tracks.firstOrNull() ?: state.currentTrack,
-                    liked = mergedLiked,
-                    skips = mergedSkips,
-                    longListens = mergedLong,
-                    localPlays = mergedPlays,
-                    recentTrackIds = state.recentTrackIds.filter { id -> tracks.any { it.id == id } },
+                    tracks = prepared.tracks,
+                    rawTrackCount = library.rawTrackCount.takeIf { it > 0 } ?: prepared.tracks.sumOf { 1 + it.alternates.size },
+                    audioFeatures = prepared.features,
+                    currentTrack = prepared.tracks.firstOrNull() ?: state.currentTrack,
+                    liked = prepared.liked,
+                    skips = prepared.skips,
+                    longListens = prepared.longListens,
+                    localPlays = prepared.localPlays,
+                    recentTrackIds = prepared.recentTrackIds,
                     jellyfinPlaylists = library.playlists,
                     selectedPlaylist = null,
                     selectedPlaylistTracks = emptyList(),
-                    status = "Connected. Loaded ${tracks.size} deduped tracks from ${library.rawTrackCount.takeIf { it > 0 } ?: tracks.size} library items and ${library.playlists.size} playlists."
+                    status = "Connected. Loaded ${prepared.tracks.size} deduped tracks from ${library.rawTrackCount.takeIf { it > 0 } ?: prepared.tracks.size} library items and ${library.playlists.size} playlists."
                 )
-                persistCachedLibrary(tracks, library.playlists)
-                persistAudioFeatureCache(features)
+                withContext(Dispatchers.IO) {
+                    persistCachedLibrary(prepared.tracks, library.playlists)
+                    persistAudioFeatureCache(prepared.features)
+                }
                 persistSignals()
             }.onFailure { error ->
                 state = state.copy(
@@ -919,7 +963,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             source.sortedByDescending {
                 recommendationScore(
                     it,
-                    state.liked[it.id] == true,
+                    state.liked.isLiked(it),
                     state.longListens[it.id] ?: 0,
                     state.skips[it.id] ?: 0,
                     state.localPlays[it.id] ?: 0
@@ -1125,7 +1169,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                             samplingRate: Int
                         ) {
                             val now = System.currentTimeMillis()
-                            if (waveform == null || now - lastVisualizerUpdateMs < 80L) return
+                            if (waveform == null || now - lastVisualizerUpdateMs < 120L) return
                             lastVisualizerUpdateMs = now
                             val frame = visualizerAnalysis.analyzeWaveform(waveform, now)
                             viewModelScope.launch {
@@ -1143,7 +1187,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                             samplingRate: Int
                         ) {
                             val now = System.currentTimeMillis()
-                            if (fft == null || now - lastVisualizerUpdateMs < 33L) return
+                            if (fft == null || now - lastVisualizerUpdateMs < 80L) return
                             lastVisualizerUpdateMs = now
                             val frame = visualizerAnalysis.analyzeVisualizerFft(fft, samplingRate, now)
                             viewModelScope.launch {
@@ -1432,28 +1476,74 @@ private fun JellyMixApp(
     LaunchedEffect(state.currentTrack.id) {
         showMiniPlayer = true
     }
-    val rankedTracks = deduplicateTracks(state.rankedTracks())
-    val visibleTracks = filterTracks(rankedTracks, state.searchQuery)
-    val discoveryTracks = discoveryTracks(
-        tracks = visibleTracks,
-        filter = state.discoveryFilter,
-        liked = state.liked,
-        skips = state.skips,
-        longListens = state.longListens,
-        currentTrack = state.currentTrack
-    )
-    val recentTracks = state.recentTracks()
-    val recentTrackPlays = state.recentTrackPlays()
-    val vibeMixes = buildVibeMixes(deduplicateTracks(state.tracks), state.vibeQuery, state.liked, state.longListens, state.localPlays, state.audioFeatures)
-    val mixes = buildMixes(
-        rankedTracks,
+    val homeOnly = state.selectedTab == Tab.Home && !showNowPlaying
+    val rankedTracks = remember(homeOnly, state.tracks, state.liked, state.longListens, state.skips, state.localPlays) {
+        if (homeOnly) {
+            state.tracks
+                .take(240)
+                .sortedByDescending { track ->
+                    recommendationScore(
+                        track = track,
+                        liked = state.liked.isLiked(track),
+                        longListens = state.longListens[track.id] ?: 0,
+                        skips = state.skips[track.id] ?: 0,
+                        localPlays = state.localPlays[track.id] ?: 0
+                    )
+                }
+        } else {
+            deduplicateTracks(state.rankedTracks())
+        }
+    }
+    val visibleTracks = remember(rankedTracks, state.searchQuery) {
+        filterTracks(rankedTracks, state.searchQuery)
+    }
+    val discoveryTracks = remember(
+        visibleTracks,
+        state.discoveryFilter,
         state.liked,
-        state.longListens,
         state.skips,
-        state.localPlays,
-        recentTracks,
-        state.audioFeatures
-    )
+        state.longListens,
+        state.currentTrack.id
+    ) {
+        discoveryTracks(
+            tracks = visibleTracks,
+            filter = state.discoveryFilter,
+            liked = state.liked,
+            skips = state.skips,
+            longListens = state.longListens,
+            currentTrack = state.currentTrack
+        )
+    }
+    val recentTracks = remember(state.recentTrackIds, state.tracks) {
+        state.recentTracks()
+    }
+    val recentTrackPlays = remember(state.recentTrackIds, state.tracks) {
+        state.recentTrackPlays()
+    }
+    val needsVibeMixes = state.selectedTab == Tab.Mixes && state.mixesSegment == MixesSegment.Vibes && !showNowPlaying
+    val vibeMixes = remember(needsVibeMixes, state.tracks, state.vibeQuery, state.liked, state.longListens, state.localPlays, state.audioFeatures) {
+        if (needsVibeMixes) {
+            buildVibeMixes(deduplicateTracks(state.tracks), state.vibeQuery, state.liked, state.longListens, state.localPlays, state.audioFeatures)
+        } else {
+            emptyList()
+        }
+    }
+    val needsFullMixes = showNowPlaying || state.selectedTab == Tab.Mixes
+    val mixes = remember(needsFullMixes, rankedTracks, state.liked, state.longListens, state.skips, state.localPlays, recentTracks, state.audioFeatures) {
+        if (needsFullMixes) {
+            buildMixes(
+                rankedTracks,
+                state.liked,
+                state.longListens,
+                state.skips,
+                state.localPlays,
+                recentTracks,
+                state.audioFeatures
+            )
+        } else {
+            buildHomeSpeedDialMixesFast(rankedTracks, state.liked, state.longListens, state.skips, state.localPlays, state.audioFeatures)
+        }
+    }
 
     Scaffold(
         bottomBar = {
@@ -1555,7 +1645,7 @@ private fun JellyMixApp(
                     Tab.Mixes -> {
                         item { MixesSegmentControl(state.mixesSegment, viewModel::setMixesSegment) }
                         when (state.mixesSegment) {
-                            MixesSegment.Mixes -> items(mixes) { mix ->
+                            MixesSegment.Mixes -> items(mixes, key = { it.name }) { mix ->
                                 PlaylistCard(mix, state.liked, viewModel::startQueue, viewModel::startShuffledQueue, viewModel::selectTrack)
                             }
                             MixesSegment.Vibes -> {
@@ -1567,7 +1657,7 @@ private fun JellyMixApp(
                                     )
                                 }
                                 item { VibeChipRow(state.vibeQuery, viewModel::setVibeQuery) }
-                                items(vibeMixes) { vibe ->
+                                items(vibeMixes, key = { it.name }) { vibe ->
                                     VibeMixCard(
                                         mix = vibe,
                                         liked = state.liked,
@@ -2165,7 +2255,7 @@ private fun HomeNowCard(
                         Icon(if (state.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, contentDescription = "Play")
                     }
                     IconButton(onClick = onLike) {
-                        HeartIcon(state.liked[state.currentTrack.id] == true)
+                        HeartIcon(state.liked.isLiked(state.currentTrack))
                     }
                     IconButton(onClick = onNext) {
                         Icon(Icons.Filled.SkipNext, contentDescription = "Next")
@@ -2495,7 +2585,7 @@ private fun JarvisResultsSection(state: JellyMixState, onRetry: () -> Unit, onTr
                         Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     results.take(12).forEach { track ->
-                        QueueReasonRow(track, state.liked[track.id] == true, queueReason(track, state.currentTrack, state.djMode)) {
+                        QueueReasonRow(track, state.liked.isLiked(track), queueReason(track, state.currentTrack, state.djMode)) {
                             onTrackSelected(track)
                         }
                     }
@@ -2575,7 +2665,7 @@ private fun VibeMixCard(
                     Text("Shuffle")
                 }
             }
-            mix.tracks.take(3).forEach { track -> QueueReasonRow(track, liked[track.id] == true) { onTrackSelected(track) } }
+            mix.tracks.take(3).forEach { track -> QueueReasonRow(track, liked.isLiked(track)) { onTrackSelected(track) } }
         }
     }
 }
@@ -2649,7 +2739,7 @@ private fun MixRail(
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         SectionHeader(title)
         LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(mixes) { mix ->
+            items(mixes, key = { it.name }) { mix ->
                 Card(
                     modifier = Modifier
                         .width(244.dp)
@@ -2690,7 +2780,7 @@ private fun TrackRail(title: String, tracks: List<Track>, onTrackSelected: (Trac
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         SectionHeader(title)
         LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(tracks) { track ->
+            items(tracks, key = { it.id }) { track ->
                 Card(
                     modifier = Modifier
                         .width(148.dp)
@@ -2713,7 +2803,7 @@ private fun RecentTrackRail(title: String, plays: List<RecentTrackPlay>, onTrack
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         SectionHeader(title)
         LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(plays) { play ->
+            items(plays, key = { it.track.id }) { play ->
                 Card(
                     modifier = Modifier
                         .width(154.dp)
@@ -2742,7 +2832,7 @@ private fun TrackSection(title: String, tracks: List<Track>, liked: Map<String, 
         if (tracks.isEmpty()) {
             EmptyState("No matching tracks", "Try another search or reload your Jellyfin library.")
         } else {
-            tracks.forEach { track -> TrackRow(track, liked[track.id] == true) { onTrackSelected(track) } }
+            tracks.forEach { track -> TrackRow(track, liked.isLiked(track)) { onTrackSelected(track) } }
         }
     }
 }
@@ -2765,7 +2855,7 @@ private fun LazyListScope.libraryBrowseContent(
                 .groupBy { it.artist }
                 .toSortedMap(String.CASE_INSENSITIVE_ORDER)
                 .toList()
-            items(artists) { (artist, artistTracks) ->
+            items(artists, key = { it.first }) { (artist, artistTracks) ->
                 LibraryGroupCard(
                     title = artist,
                     subtitle = "${artistTracks.size} tracks",
@@ -2782,7 +2872,7 @@ private fun LazyListScope.libraryBrowseContent(
                 .groupBy { it.album }
                 .toSortedMap(String.CASE_INSENSITIVE_ORDER)
                 .toList()
-            items(albums) { (album, albumTracks) ->
+            items(albums, key = { it.first }) { (album, albumTracks) ->
                 val artist = albumTracks.groupingBy { it.artist }.eachCount().maxByOrNull { it.value }?.key.orEmpty()
                 LibraryGroupCard(
                     title = album,
@@ -2800,7 +2890,7 @@ private fun LazyListScope.libraryBrowseContent(
                 .groupBy { it.genre }
                 .toSortedMap(String.CASE_INSENSITIVE_ORDER)
                 .toList()
-            items(genres) { (genre, genreTracks) ->
+            items(genres, key = { it.first }) { (genre, genreTracks) ->
                 LibraryGroupCard(
                     title = genre,
                     subtitle = "${genreTracks.size} tracks",
@@ -2833,7 +2923,7 @@ private fun LibraryGroupCard(
                 PrimaryPlayButton(onClick = onQueueSelected, enabled = tracks.isNotEmpty())
             }
             tracks.take(4).forEach { track ->
-                QueueReasonRow(track, liked[track.id] == true) { onTrackSelected(track) }
+                QueueReasonRow(track, liked.isLiked(track)) { onTrackSelected(track) }
             }
         }
     }
@@ -2894,7 +2984,7 @@ private fun PlaylistCard(
                     Text("Shuffle")
                 }
             }
-            mix.tracks.take(4).forEach { track -> TrackRow(track, liked[track.id] == true) { onTrackSelected(track) } }
+            mix.tracks.take(4).forEach { track -> TrackRow(track, liked.isLiked(track)) { onTrackSelected(track) } }
         }
     }
 }
@@ -2921,7 +3011,7 @@ private fun UpNextSection(
                 }
             }
             queue.drop(queueIndex + 1).take(5).forEach { track ->
-                QueueReasonRow(track, liked[track.id] == true, queueReason(track, currentTrack, djMode)) { onTrackSelected(track) }
+                QueueReasonRow(track, liked.isLiked(track), queueReason(track, currentTrack, djMode)) { onTrackSelected(track) }
             }
             if (queue.drop(queueIndex + 1).isEmpty()) {
                 EmptyState("Autoplay follows this", "JellyMix will keep going with related tracks when this queue ends.")
@@ -2996,7 +3086,7 @@ private fun QueueSheet(
                 val queueIndex = state.queueIndex + index
                 QueueSheetRow(
                     track = track,
-                    liked = state.liked[track.id] == true,
+                    liked = state.liked.isLiked(track),
                     reason = if (index == 0) "Now playing" else queueReason(track, state.currentTrack, state.djMode),
                     queueIndex = queueIndex,
                     canMoveUp = queueIndex > state.queueIndex,
@@ -3012,7 +3102,7 @@ private fun QueueSheet(
             suggestions.forEach { track ->
                 QueueSuggestionRow(
                     track = track,
-                    liked = state.liked[track.id] == true,
+                    liked = state.liked.isLiked(track),
                     onPlayNext = { onPlayNext(track) },
                     onAddToQueue = { onAddToQueue(track) },
                     onClick = { onTrackSelected(track) }
@@ -3139,7 +3229,7 @@ private fun AutoplayPreviewSection(state: JellyMixState, onTrackSelected: (Track
             Text("Autoplay preview", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Text("If the queue ends, Jarvis will keep going from ${state.currentTrack.title}.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             preview.forEach { track ->
-                QueueReasonRow(track, state.liked[track.id] == true, queueReason(track, state.currentTrack, state.djMode)) { onTrackSelected(track) }
+                QueueReasonRow(track, state.liked.isLiked(track), queueReason(track, state.currentTrack, state.djMode)) { onTrackSelected(track) }
             }
         }
     }
@@ -3176,7 +3266,7 @@ private fun JellyfinPlaylistRail(playlists: List<JellyfinPlaylist>, onPlaylistSe
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         SectionHeader("Jellyfin playlists")
         LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(playlists) { playlist ->
+            items(playlists, key = { it.id }) { playlist ->
                 Card(
                     modifier = Modifier
                         .width(180.dp)
@@ -3213,7 +3303,7 @@ private fun SelectedPlaylistSection(
                 Text("Play playlist queue")
             }
             tracks.take(12).forEach { track ->
-                TrackRow(track, liked[track.id] == true) { onTrackSelected(track) }
+                TrackRow(track, liked.isLiked(track)) { onTrackSelected(track) }
             }
         }
     }
@@ -3352,9 +3442,9 @@ private fun NowPlayingPage(
                         onClick = onShuffle
                     )
                     SecondaryPlayerButton(
-                        icon = if (state.liked[track.id] == true) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                        icon = if (state.liked.isLiked(track)) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
                         contentDescription = "Like",
-                        active = state.liked[track.id] == true,
+                        active = state.liked.isLiked(track),
                         onClick = onLike
                     )
                     SecondaryPlayerButton(
@@ -3927,7 +4017,7 @@ data class JellyMixState(
         deduplicateTracks(tracks).sortedByDescending { track ->
             recommendationScore(
                 track = track,
-                liked = liked[track.id] == true,
+                liked = liked.isLiked(track),
                 longListens = longListens[track.id] ?: 0,
                 skips = skips[track.id] ?: 0,
                 localPlays = localPlays[track.id] ?: 0
@@ -3954,6 +4044,8 @@ data class JellyMixState(
 }
 
 data class RecentTrackPlay(val track: Track, val count: Int)
+
+private fun Map<String, Boolean>.isLiked(track: Track): Boolean = this[track.id] ?: track.liked
 
 data class Track(
     val id: String,
@@ -4034,6 +4126,16 @@ data class JellyfinPlaylist(val id: String, val name: String, val childCount: In
 private data class JellyfinSession(val token: String, val userId: String)
 
 private data class JellyfinLibraryLoad(val tracks: List<Track>, val playlists: List<JellyfinPlaylist>, val rawTrackCount: Int = tracks.sumOf { 1 + it.alternates.size })
+
+private data class PreparedLibraryState(
+    val tracks: List<Track>,
+    val features: Map<String, TrackAudioFeatures>,
+    val liked: Map<String, Boolean>,
+    val skips: Map<String, Int>,
+    val longListens: Map<String, Int>,
+    val localPlays: Map<String, Int>,
+    val recentTrackIds: List<String>
+)
 
 data class JellyfinServerInfo(val serverName: String, val version: String)
 
@@ -4241,7 +4343,7 @@ internal fun buildMixes(
 ): List<Mix> {
     val library = deduplicateTracks(rankedTracks)
     val recentIds = deduplicateTracks(recentTracks).map { it.id }.toSet()
-    val likedIds = library.filter { liked[it.id] == true || it.liked }.map { it.id }.toSet()
+    val likedIds = library.filter { liked.isLiked(it) }.map { it.id }.toSet()
     val libraryCenter = features.featureCenter(library)
     val likedCenter = features.featureCenter(library.filter { it.id in likedIds }).takeIf { likedIds.isNotEmpty() } ?: libraryCenter
     val definitions = listOf(
@@ -4299,6 +4401,52 @@ internal fun buildMixes(
         selectedByName[definition.name] = Mix(definition.name, definition.reason, selected.tracks, selected.note)
     }
     return definitions.mapNotNull { selectedByName[it.name] }
+}
+
+internal fun buildHomeSpeedDialMixesFast(
+    rankedTracks: List<Track>,
+    liked: Map<String, Boolean>,
+    longListens: Map<String, Int>,
+    skips: Map<String, Int>,
+    localPlays: Map<String, Int>,
+    features: Map<String, TrackAudioFeatures>
+): List<Mix> {
+    val library = rankedTracks.take(180)
+    if (library.isEmpty()) return emptyList()
+    fun diverse(source: List<Track>, limit: Int): List<Track> =
+        source.distinctBy { it.id }.artistDiverseTake(limit)
+    return listOf(
+        Mix(
+            "Quick Shuffle",
+            "A loose station of familiar tracks that usually survive skips.",
+            diverse(library.sortedWith(compareBy<Track> { skips[it.id] ?: it.skipped }.thenByDescending { it.completion }), 18)
+        ),
+        Mix(
+            "Rediscover",
+            "Older library tracks worth another pass.",
+            diverse(library.sortedWith(compareBy<Track> { localPlays[it.id] ?: 0 }.thenByDescending { it.plays }), 18)
+        ),
+        Mix(
+            "Liked Radio",
+            "Favorites and tracks near your explicit likes.",
+            diverse(library.filter { liked.isLiked(it) }.ifEmpty { library }, 18)
+        ),
+        Mix(
+            "Loud Flow",
+            "Higher-energy tracks from your library.",
+            diverse(library.sortedByDescending { features.forTrack(it).rmsEnergy + features.forTrack(it).dynamicRange }, 18)
+        ),
+        Mix(
+            "Library Radio",
+            "A broad station across the full library.",
+            diverse(library, 18)
+        ),
+        Mix(
+            "Weekly Discovery",
+            "Low-play tracks with promising local signals.",
+            diverse(library.sortedWith(compareBy<Track> { localPlays[it.id] ?: it.plays }.thenByDescending { it.completion + ((longListens[it.id] ?: 0) * 0.1f) }), 18)
+        )
+    )
 }
 
 private data class SelectionResult(val tracks: List<Track>, val note: String? = null)
@@ -4474,7 +4622,7 @@ internal fun rankTracksForVibe(
         val profileBoost = vibeFitScore(profile.name, feature) * 100f
         val queryBoost = if (query.isNotBlank() && query in text) 90f else 0f
         val lightPersonalTieBreak =
-            (if (liked[track.id] == true || track.liked) 4f else 0f) +
+            (if (liked.isLiked(track)) 4f else 0f) +
                 ((longListens[track.id] ?: 0) * 0.5f) +
                 ((localPlays[track.id] ?: 0) * 0.25f)
         profileBoost + queryBoost + lightPersonalTieBreak + track.dailyJitter("$daySeed:${profile.name}") * 0.01f
@@ -4539,7 +4687,7 @@ internal fun discoveryTracks(
         DiscoveryFilter.LongListens ->
             deduplicateTracks(tracks).sortedByDescending { it.durationSec + ((longListens[it.id] ?: 0) * 120) }
         DiscoveryFilter.Liked ->
-            deduplicateTracks(tracks).filter { liked[it.id] == true || it.liked }
+            deduplicateTracks(tracks).filter { liked.isLiked(it) }
         DiscoveryFilter.LowSkips ->
             deduplicateTracks(tracks).sortedWith(compareBy<Track> { skips[it.id] ?: it.skipped }.thenByDescending { it.completion })
         DiscoveryFilter.SimilarMood ->
@@ -4568,7 +4716,7 @@ internal fun buildTrackRadio(
                     (if (track.artist == seed.artist) 15f else 0f)
             similarityBoost + recommendationScore(
                 track = track,
-                liked = liked[track.id] == true,
+                liked = liked.isLiked(track),
                 longListens = longListens[track.id] ?: 0,
                 skips = skips[track.id] ?: 0,
                 localPlays = localPlays[track.id] ?: 0
@@ -4592,7 +4740,7 @@ internal fun buildGuestDjQueue(
     val ranked = library.sortedByDescending { track ->
         val base = recommendationScore(
             track = track,
-            liked = liked[track.id] == true,
+            liked = liked.isLiked(track),
             longListens = longListens[track.id] ?: 0,
             skips = skips[track.id] ?: 0,
             localPlays = localPlays[track.id] ?: 0
@@ -4606,12 +4754,12 @@ internal fun buildGuestDjQueue(
         val freshness = if (track.id in recentIds) -18f else 8f
         val modeBoost = when (mode) {
             GuestDjMode.Flow -> continuity + freshness
-            GuestDjMode.Familiar -> base + if (liked[track.id] == true || (localPlays[track.id] ?: 0) > 1) 36f else 0f
+            GuestDjMode.Familiar -> base + if (liked.isLiked(track) || (localPlays[track.id] ?: 0) > 1) 36f else 0f
             GuestDjMode.Discovery -> freshness + if ((localPlays[track.id] ?: 0) == 0 && track.plays <= 2) 40f else 0f
             GuestDjMode.DeepCuts -> {
                 val lowPlayBoost = (30 - track.plays.coerceAtMost(30)) * 2.8f
                 val skipGuard = if ((skips[track.id] ?: track.skipped) <= 2) 24f else -28f
-                lowPlayBoost + skipGuard - if (liked[track.id] == true && track.plays > 12) 30f else 0f
+                lowPlayBoost + skipGuard - if (liked.isLiked(track) && track.plays > 12) 30f else 0f
             }
             GuestDjMode.ArtistFocus -> if (track.artist == seed.artist) 62f else if (track.album == seed.album) 34f else -10f
             GuestDjMode.HighEnergy -> if (track.mood in setOf("Drive", "Loud", "Bright", "Focused") || track.genre in setOf("Rock", "Synth", "Electronic")) 44f else -10f
@@ -4723,7 +4871,7 @@ internal fun buildAutoplayQueue(
             val freshness = if (track.id in recentPenaltyIds) -24f else 10f
             continuity + freshness + recommendationScore(
                 track = track,
-                liked = liked[track.id] == true,
+                liked = liked.isLiked(track),
                 longListens = longListens[track.id] ?: 0,
                 skips = skips[track.id] ?: 0,
                 localPlays = localPlays[track.id] ?: 0
