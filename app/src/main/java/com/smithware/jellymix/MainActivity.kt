@@ -235,10 +235,12 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     private val prefs = application.getSharedPreferences("jellymix", Application.MODE_PRIVATE)
     private val client = JellyfinClient()
     private var player: ExoPlayer? = null
+    private var pendingPlayer: ExoPlayer? = null
     private var preloadedPlayer: ExoPlayer? = null
     private var preloadedTrackId: String? = null
     private var crossfadePlayer: ExoPlayer? = null
     private var crossfadeTrackId: String? = null
+    private var playbackRequestToken = 0L
     private var playbackMonitorJob: Job? = null
     private var crossfadeJob: Job? = null
     private var visualizer: Visualizer? = null
@@ -455,7 +457,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         }
         state = state.copy(visualizerPermissionGranted = granted, visualizerMessage = message)
         if (granted && state.isPlaying && !state.currentTrack.id.startsWith("sample-")) {
-            player?.audioSessionId?.takeIf { it != 0 }?.let(::startAudioVisualizer)
+            player?.audioSessionId?.takeIf { it != 0 && it != C.AUDIO_SESSION_ID_UNSET }?.let(::startAudioVisualizer)
         }
     }
 
@@ -713,8 +715,8 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             return
         }
         val activePlayer = player
-        if (activePlayer != null && activePlayer.isPlaying) {
-            activePlayer.pause()
+        if (activePlayer != null && runCatching { activePlayer.isPlaying }.getOrDefault(false)) {
+            runCatching { activePlayer.pause() }
             cancelPlaybackMonitor()
             cancelCrossfade()
             releaseAudioVisualizer()
@@ -869,9 +871,11 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun stopPlayback() {
+        playbackRequestToken++
         cancelPlaybackMonitor()
         cancelCrossfade()
-        player?.release()
+        releasePendingPlayer()
+        runCatching { player?.release() }
         player = null
         releasePreloadedPlayer()
         releaseAudioVisualizer()
@@ -957,9 +961,11 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun clearSession() {
+        playbackRequestToken++
         cancelPlaybackMonitor()
         cancelCrossfade()
-        player?.release()
+        releasePendingPlayer()
+        runCatching { player?.release() }
         releasePreloadedPlayer()
         releaseAudioVisualizer()
         player = null
@@ -1103,10 +1109,12 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
 
     private fun playCurrentTrack() {
         val track = state.currentTrack
+        val requestToken = ++playbackRequestToken
         cancelPlaybackMonitor()
         cancelCrossfade()
         if (state.token.isBlank() || track.id.startsWith("sample-")) {
             releaseAudioVisualizer()
+            releasePendingPlayer()
             releasePreloadedPlayer()
             recordPlayStart(track)
             state = state.copy(
@@ -1123,12 +1131,14 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         val preparedPlayer = preloadedPlayer
         if (preparedPlayer != null && preloadedTrackId == track.id) {
             runCatching {
+                val oldPlayer = player
                 releaseAudioVisualizer()
-                player?.release()
+                releasePendingPlayer()
                 preloadedPlayer = null
                 preloadedTrackId = null
                 player = preparedPlayer
                 preparedPlayer.play()
+                if (oldPlayer !== preparedPlayer) viewModelScope.launch { runCatching { oldPlayer?.release() } }
                 recordPlayStart(track)
                 startPlaybackMonitor(track.id)
                 state = state.copy(
@@ -1141,14 +1151,14 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 startAudioVisualizer(preparedPlayer.audioSessionId)
                 preloadUpcomingTrack()
             }.onFailure { error ->
-                preparedPlayer.release()
+                runCatching { preparedPlayer.release() }
                 player = null
                 state = state.copy(status = "Preloaded playback failed: ${error.cleanMessage()}")
-                playCurrentTrackWithoutPreload(track, streamUrl)
+                playCurrentTrackWithoutPreload(track, streamUrl, requestToken)
             }
             return
         }
-        playCurrentTrackWithoutPreload(track, streamUrl)
+        playCurrentTrackWithoutPreload(track, streamUrl, requestToken)
     }
 
     private fun scheduleCurrentTrackLoad() {
@@ -1160,17 +1170,23 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    private fun playCurrentTrackWithoutPreload(track: Track, streamUrl: String) {
+    private fun playCurrentTrackWithoutPreload(track: Track, streamUrl: String, requestToken: Long) {
         state = state.copy(
             visualizerBands = syntheticVisualizerBands(track),
             audioFrame = visualizerAnalysis.ambient(track),
             status = "Buffering ${track.title}..."
         )
         runCatching {
-            releaseAudioVisualizer()
+            val oldPlayer = player
+            releasePendingPlayer()
             releasePreloadedPlayer()
-            player?.release()
-            player = buildStreamingPlayer(track, streamUrl, playWhenReady = true).also { it.prepare() }
+            pendingPlayer = buildStreamingPlayer(
+                track = track,
+                streamUrl = streamUrl,
+                playWhenReady = true,
+                requestToken = requestToken,
+                playerToReplace = oldPlayer
+            ).also { it.prepare() }
         }.onFailure { error ->
             releaseAudioVisualizer()
             state = state.copy(
@@ -1184,7 +1200,13 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    private fun buildStreamingPlayer(track: Track, streamUrl: String, playWhenReady: Boolean): ExoPlayer =
+    private fun buildStreamingPlayer(
+        track: Track,
+        streamUrl: String,
+        playWhenReady: Boolean,
+        requestToken: Long,
+        playerToReplace: ExoPlayer?
+    ): ExoPlayer =
         ExoPlayer.Builder(appContext).build().apply {
             setAudioAttributes(musicAudioAttributes, true)
             setMediaItem(MediaItem.fromUri(Uri.parse(streamUrl)))
@@ -1193,11 +1215,19 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 private var started = false
 
                 override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (requestToken != playbackRequestToken || state.currentTrack.id != track.id) {
+                        if (pendingPlayer === this@apply) pendingPlayer = null
+                        viewModelScope.launch { runCatching { this@apply.release() } }
+                        return
+                    }
                     when (playbackState) {
                         Player.STATE_READY -> {
-                            if (state.currentTrack.id != track.id && preloadedTrackId != track.id) return
                             if (playWhenReady && !started) {
                                 started = true
+                                pendingPlayer = null
+                                releaseAudioVisualizer()
+                                player = this@apply
+                                if (playerToReplace !== this@apply) viewModelScope.launch { runCatching { playerToReplace?.release() } }
                                 recordPlayStart(track)
                                 startPlaybackMonitor(track.id)
                                 state = state.copy(
@@ -1212,13 +1242,14 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                             }
                         }
                         Player.STATE_ENDED -> {
-                            if (state.currentTrack.id == track.id) handlePlaybackCompletion()
+                            if (requestToken == playbackRequestToken && state.currentTrack.id == track.id) handlePlaybackCompletion()
                         }
                     }
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
-                    if (state.currentTrack.id != track.id) return
+                    if (requestToken != playbackRequestToken || state.currentTrack.id != track.id) return
+                    if (pendingPlayer === this@apply) pendingPlayer = null
                     releaseAudioVisualizer()
                     state = state.copy(
                         isPlaying = false,
@@ -1435,9 +1466,14 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun releasePreloadedPlayer() {
-        preloadedPlayer?.release()
+        runCatching { preloadedPlayer?.release() }
         preloadedPlayer = null
         preloadedTrackId = null
+    }
+
+    private fun releasePendingPlayer() {
+        runCatching { pendingPlayer?.release() }
+        pendingPlayer = null
     }
 
     private fun cancelPlaybackMonitor() {
@@ -1448,13 +1484,13 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     private fun cancelCrossfade() {
         crossfadeJob?.cancel()
         crossfadeJob = null
-        crossfadePlayer?.release()
+        runCatching { crossfadePlayer?.release() }
         crossfadePlayer = null
         crossfadeTrackId = null
     }
 
     private fun startAudioVisualizer(audioSessionId: Int) {
-        if (audioSessionId == 0) return
+        if (audioSessionId == 0 || audioSessionId == C.AUDIO_SESSION_ID_UNSET) return
         if (!state.visualizerPermissionGranted) {
             val frame = visualizerAnalysis.ambient(state.currentTrack)
             visualizerFrameBus.publish(frame)
@@ -1585,8 +1621,9 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         WidgetPlaybackBridge.unregister(widgetPlaybackController)
         cancelPlaybackMonitor()
         cancelCrossfade()
+        releasePendingPlayer()
         releasePreloadedPlayer()
-        player?.release()
+        runCatching { player?.release() }
         player = null
         playbackNotificationController.release()
         super.onCleared()
