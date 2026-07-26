@@ -68,6 +68,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Recommend
 import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
@@ -145,6 +146,7 @@ import kotlin.math.absoluteValue
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -156,6 +158,8 @@ internal const val WIDGET_ACTION_SKIP = "com.smithware.jellymix.widget.SKIP"
 internal const val WIDGET_ACTION_PREVIOUS = "com.smithware.jellymix.widget.PREVIOUS"
 internal const val WIDGET_ACTION_STOP = "com.smithware.jellymix.widget.STOP"
 private const val DefaultJarvisPrompt = "Tell me what you want to hear. I can go deeper, keep it familiar, make it louder, chill it out, or build around an artist."
+private const val CrossfadeDurationMs = 2_800L
+private const val CrossfadeTriggerRemainingMs = 3_400L
 
 class MainActivity : ComponentActivity() {
     private val viewModel: JellyMixViewModel by viewModels()
@@ -222,6 +226,10 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     private var player: MediaPlayer? = null
     private var preloadedPlayer: MediaPlayer? = null
     private var preloadedTrackId: String? = null
+    private var crossfadePlayer: MediaPlayer? = null
+    private var crossfadeTrackId: String? = null
+    private var playbackMonitorJob: Job? = null
+    private var crossfadeJob: Job? = null
     private var visualizer: Visualizer? = null
     private val visualizerAnalysis = VisualizerAnalysisEngine()
     val visualizerFrameBus = VisualizerFrameBus()
@@ -683,6 +691,8 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         val activePlayer = player
         if (activePlayer != null && activePlayer.isPlaying) {
             activePlayer.pause()
+            cancelPlaybackMonitor()
+            cancelCrossfade()
             releaseAudioVisualizer()
             state = state.copy(
                 isPlaying = false,
@@ -830,6 +840,8 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun stopPlayback() {
+        cancelPlaybackMonitor()
+        cancelCrossfade()
         player?.stop()
         player?.release()
         player = null
@@ -916,6 +928,8 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun clearSession() {
+        cancelPlaybackMonitor()
+        cancelCrossfade()
         player?.release()
         releasePreloadedPlayer()
         releaseAudioVisualizer()
@@ -1059,6 +1073,8 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
 
     private fun playCurrentTrack() {
         val track = state.currentTrack
+        cancelPlaybackMonitor()
+        cancelCrossfade()
         if (state.token.isBlank() || track.id.startsWith("sample-")) {
             releaseAudioVisualizer()
             releasePreloadedPlayer()
@@ -1085,6 +1101,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 configureActivePlayer(preparedPlayer, track)
                 preparedPlayer.start()
                 recordPlayStart(track)
+                startPlaybackMonitor(track.id)
                 state = state.copy(
                     isPlaying = true,
                     visualizerBands = syntheticVisualizerBands(track),
@@ -1120,6 +1137,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 setOnPreparedListener {
                     it.start()
                     recordPlayStart(track)
+                    startPlaybackMonitor(track.id)
                     state = state.copy(
                         isPlaying = true,
                         visualizerBands = syntheticVisualizerBands(track),
@@ -1178,9 +1196,159 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun handlePlaybackCompletion() {
+        cancelPlaybackMonitor()
+        if (crossfadeTrackId != null) return
         releaseAudioVisualizer()
         markLongListen()
         advanceQueue(countSkip = false, keepPlaying = true)
+    }
+
+    private fun startPlaybackMonitor(trackId: String) {
+        cancelPlaybackMonitor()
+        playbackMonitorJob = viewModelScope.launch {
+            while (state.isPlaying && state.currentTrack.id == trackId) {
+                val activePlayer = player
+                val durationMs = runCatching { activePlayer?.duration ?: 0 }.getOrDefault(0)
+                val positionMs = runCatching { activePlayer?.currentPosition ?: 0 }.getOrDefault(0)
+                if (durationMs > 0 && positionMs >= 0) {
+                    val progress = (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+                    if (state.currentTrack.id == trackId) {
+                        state = state.copy(currentTrack = state.currentTrack.copy(completion = progress))
+                    }
+                    val remainingMs = durationMs - positionMs
+                    if (
+                        remainingMs in 1..CrossfadeTriggerRemainingMs &&
+                        durationMs > CrossfadeDurationMs + 1_000L &&
+                        crossfadeTrackId == null
+                    ) {
+                        startCrossfadeToNext(trackId)
+                        break
+                    }
+                }
+                delay(500)
+            }
+        }
+    }
+
+    private fun startCrossfadeToNext(fromTrackId: String) {
+        val oldPlayer = player ?: return
+        if (!state.isPlaying || state.currentTrack.id != fromTrackId || crossfadeTrackId != null) return
+        val continuation = nextPlaybackContinuation()
+        val nextTrack = continuation.track
+        if (nextTrack.id == fromTrackId) return
+        val streamUrl = client.streamUrl(state.serverUrl, nextTrack.id, state.token)
+        crossfadeTrackId = nextTrack.id
+        oldPlayer.setOnCompletionListener { }
+        runCatching {
+            crossfadePlayer = MediaPlayer().apply {
+                setAudioAttributes(musicAudioAttributes)
+                setVolume(0f, 0f)
+                setDataSource(appContext, Uri.parse(streamUrl))
+                setOnPreparedListener { nextPlayer ->
+                    if (!state.isPlaying || state.currentTrack.id != fromTrackId || crossfadeTrackId != nextTrack.id) {
+                        nextPlayer.release()
+                        if (crossfadePlayer === nextPlayer) {
+                            crossfadePlayer = null
+                            crossfadeTrackId = null
+                        }
+                        return@setOnPreparedListener
+                    }
+                    crossfadePlayer = null
+                    releaseAudioVisualizer()
+                    player = nextPlayer
+                    configureActivePlayer(nextPlayer, nextTrack)
+                    nextPlayer.start()
+                    recordPlayStart(nextTrack)
+                    state = state.copy(
+                        currentTrack = nextTrack,
+                        queue = continuation.queue,
+                        queueIndex = continuation.queueIndex,
+                        queueTitle = continuation.queueTitle,
+                        isPlaying = true,
+                        visualizerBands = syntheticVisualizerBands(nextTrack),
+                        audioFrame = visualizerAnalysis.ambient(nextTrack),
+                        status = "Melding into ${nextTrack.title}."
+                    )
+                    persistPlaybackState()
+                    startAudioVisualizer(nextPlayer.audioSessionId)
+                    fadeBetweenPlayers(oldPlayer, nextPlayer, nextTrack.id)
+                    startPlaybackMonitor(nextTrack.id)
+                }
+                setOnErrorListener { _, _, _ ->
+                    configureActivePlayer(oldPlayer, state.currentTrack)
+                    crossfadePlayer = null
+                    crossfadeTrackId = null
+                    true
+                }
+                prepareAsync()
+            }
+        }.onFailure {
+            configureActivePlayer(oldPlayer, state.currentTrack)
+            cancelCrossfade()
+        }
+    }
+
+    private fun fadeBetweenPlayers(oldPlayer: MediaPlayer, nextPlayer: MediaPlayer, nextTrackId: String) {
+        crossfadeJob?.cancel()
+        crossfadeJob = viewModelScope.launch {
+            val steps = 14
+            repeat(steps + 1) { index ->
+                val progress = index.toFloat() / steps.toFloat()
+                runCatching { oldPlayer.setVolume(1f - progress, 1f - progress) }
+                runCatching { nextPlayer.setVolume(progress, progress) }
+                delay(CrossfadeDurationMs / steps)
+            }
+            runCatching { oldPlayer.release() }
+            if (crossfadeTrackId == nextTrackId) {
+                crossfadeTrackId = null
+            }
+            crossfadeJob = null
+        }
+    }
+
+    private fun nextPlaybackContinuation(): PlaybackContinuation {
+        val playbackTracks = fullLibrarySnapshot?.tracks?.takeIf { it.isNotEmpty() } ?: state.tracks
+        val fallbackQueue = rankedPlayableTracks(playbackTracks)
+        val hadQueue = state.queue.isNotEmpty()
+        val queue = state.queue.ifEmpty {
+            buildContinuationQueue(
+                seed = state.currentTrack,
+                tracks = playbackTracks,
+                fallbackTracks = fallbackQueue,
+                liked = state.liked,
+                longListens = state.longListens,
+                skips = state.skips,
+                localPlays = state.localPlays,
+                recentlyPlayedIds = state.recentTrackIds
+            ).ifEmpty { fallbackQueue }
+        }
+        val reachedEnd = hadQueue && isQueueEnd(state.queueIndex, queue.size, state.repeatEnabled)
+        val nextQueue = if (reachedEnd && !state.repeatEnabled) {
+            buildContinuationQueue(
+                seed = state.currentTrack,
+                tracks = playbackTracks,
+                fallbackTracks = fallbackQueue,
+                liked = state.liked,
+                longListens = state.longListens,
+                skips = state.skips,
+                localPlays = state.localPlays,
+                recentlyPlayedIds = state.recentTrackIds
+            ).ifEmpty { fallbackQueue }
+        } else {
+            queue
+        }
+        val nextIndex = when {
+            !hadQueue -> 0
+            reachedEnd && !state.repeatEnabled -> 0
+            else -> nextQueueIndex(state.queueIndex, nextQueue.size, state.repeatEnabled)
+        }
+        val nextTrack = nextQueue.getOrNull(nextIndex) ?: fallbackQueue.first()
+        return PlaybackContinuation(
+            track = nextTrack,
+            queue = nextQueue.ifEmpty { listOf(nextTrack) },
+            queueIndex = nextIndex.coerceIn(0, nextQueue.lastIndex.coerceAtLeast(0)),
+            queueTitle = if (!hadQueue || reachedEnd && !state.repeatEnabled) "Autoplay radio" else state.queueTitle
+        )
     }
 
     private fun preloadCurrentTrack() {
@@ -1214,6 +1382,19 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         preloadedPlayer?.release()
         preloadedPlayer = null
         preloadedTrackId = null
+    }
+
+    private fun cancelPlaybackMonitor() {
+        playbackMonitorJob?.cancel()
+        playbackMonitorJob = null
+    }
+
+    private fun cancelCrossfade() {
+        crossfadeJob?.cancel()
+        crossfadeJob = null
+        crossfadePlayer?.release()
+        crossfadePlayer = null
+        crossfadeTrackId = null
     }
 
     private fun startAudioVisualizer(audioSessionId: Int) {
@@ -1346,6 +1527,8 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
 
     override fun onCleared() {
         WidgetPlaybackBridge.unregister(widgetPlaybackController)
+        cancelPlaybackMonitor()
+        cancelCrossfade()
         releasePreloadedPlayer()
         player?.release()
         player = null
@@ -1534,6 +1717,7 @@ private fun JellyMixApp(
 ) {
     var showNowPlaying by remember { mutableStateOf(false) }
     var showQueueSheet by remember { mutableStateOf(false) }
+    var showSettingsSheet by remember { mutableStateOf(false) }
     var showMiniPlayer by remember { mutableStateOf(true) }
     val state = viewModel.state
     LaunchedEffect(state.currentTrack.id) {
@@ -1663,6 +1847,15 @@ private fun JellyMixApp(
                 ),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
+                if (!showNowPlaying) {
+                    item(contentType = "app-header") {
+                        AppHeader(
+                            title = state.selectedTab.label,
+                            connectionLabel = state.connectionLabel,
+                            onOpenSettings = { showSettingsSheet = true }
+                        )
+                    }
+                }
                 if (state.shouldShowConnectionCard && !showNowPlaying) {
                     item(contentType = "connection") {
                     ConnectionCard(
@@ -1817,6 +2010,22 @@ private fun JellyMixApp(
                     )
                 }
             }
+            if (showSettingsSheet) {
+                ModalBottomSheet(onDismissRequest = { showSettingsSheet = false }) {
+                    SettingsSheet(
+                        state = state,
+                        onThemeModeSelected = viewModel::setThemeMode,
+                        onAccentThemeSelected = viewModel::setAccentTheme,
+                        onVisualizerDebugOverlayChanged = viewModel::setVisualizerDebugOverlay,
+                        onRequestVisualizerPermission = onRequestVisualizerPermission,
+                        onReload = viewModel::loadLibrary,
+                        onClearSession = {
+                            showSettingsSheet = false
+                            viewModel.clearSession()
+                        }
+                    )
+                }
+            }
             if (!showNowPlaying && showMiniPlayer) {
                 PlayerBar(
                     track = state.currentTrack,
@@ -1830,6 +2039,112 @@ private fun JellyMixApp(
                     onOpenQueue = { showQueueSheet = true },
                     modifier = Modifier.align(Alignment.BottomCenter)
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppHeader(title: String, connectionLabel: String, onOpenSettings: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text(
+                connectionLabel,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        IconButton(
+            onClick = onOpenSettings,
+            modifier = Modifier.size(48.dp)
+        ) {
+            Icon(Icons.Filled.Settings, contentDescription = "Open settings")
+        }
+    }
+}
+
+@Composable
+private fun SettingsSheet(
+    state: JellyMixState,
+    onThemeModeSelected: (ThemeMode) -> Unit,
+    onAccentThemeSelected: (AccentTheme) -> Unit,
+    onVisualizerDebugOverlayChanged: (Boolean) -> Unit,
+    onRequestVisualizerPermission: () -> Unit,
+    onReload: () -> Unit,
+    onClearSession: () -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxWidth(),
+        contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 4.dp, bottom = 34.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp)
+    ) {
+        item(contentType = "settings-header") {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Settings", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                Text(
+                    state.connectionLabel,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        item(contentType = "settings-account") {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Jellyfin", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                    Button(
+                        onClick = onReload,
+                        enabled = state.hasSession && !state.isLoading,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Reload")
+                    }
+                    OutlinedButton(
+                        onClick = onClearSession,
+                        enabled = state.hasSession,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Sign out")
+                    }
+                }
+                Text(
+                    state.status,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        item(contentType = "settings-theme") {
+            ThemeOptions(
+                themeMode = state.themeMode,
+                accentTheme = state.accentTheme,
+                onThemeModeSelected = onThemeModeSelected,
+                onAccentThemeSelected = onAccentThemeSelected,
+                visualizerDebugOverlay = state.visualizerDebugOverlay,
+                onVisualizerDebugOverlayChanged = onVisualizerDebugOverlayChanged
+            )
+        }
+        item(contentType = "settings-visualizer") {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Audio visualizer", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(
+                    state.visualizerMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedButton(onClick = onRequestVisualizerPermission, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (state.visualizerPermissionGranted) "Refresh audio permission" else "Enable live visualizer")
+                }
             }
         }
     }
@@ -4351,6 +4666,13 @@ private data class PreparedLibraryState(
     val longListens: Map<String, Int>,
     val localPlays: Map<String, Int>,
     val recentTrackIds: List<String>
+)
+
+private data class PlaybackContinuation(
+    val track: Track,
+    val queue: List<Track>,
+    val queueIndex: Int,
+    val queueTitle: String
 )
 
 data class JellyfinServerInfo(val serverName: String, val version: String)

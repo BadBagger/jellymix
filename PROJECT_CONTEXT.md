@@ -32,6 +32,7 @@ Done:
 - Mixes and loaded playlists can start a queue. Skip is queue-aware. Player controls include shuffle and repeat queue toggles.
 - Playback completion advances through the active queue, marks long listens, and starts an autoplay radio queue when the queue ends instead of stopping or looping the same song.
 - Playback continuation is hardened across the phone app, widget service, and Android Auto service: when a one-song or exhausted queue finishes, JellyMix builds a non-empty continuation queue from the full cached library when available, excludes the just-finished song first, and only falls back to repeating the seed when the entire available library has no other track.
+- Phone playback now has an automatic near-end crossfade: a lightweight playback monitor starts the next continuation track before completion, fades the old `MediaPlayer` down and the new one up over about 2.8 seconds, and guards old-player completion so the queue does not advance twice.
 - Track radio builds a queue from the current song using mood, genre, artist, and local listening signals. Demo playback now pauses correctly.
 - Up Next and clear-queue controls exist. Clear session removes the saved Jellyfin token and returns the app to demo mode.
 - Home is now a music-first surface with Continue Listening, a max-six speed-dial shortcut grid, recently played, and heavy rotation. Connection/search/status panels no longer consume the first Home viewport.
@@ -50,6 +51,7 @@ Done:
 - Apple CarPlay is documented as a separate iOS app requirement because this Android app cannot directly integrate with CarPlay or request Apple's CarPlay entitlement.
 - Recently played and local play counts persist on-device and influence ranking.
 - Custom theme options exist in the connection/settings card: System, Light, and Dark mode plus Jelly, Ember, Ocean, Grape, and Mono accent palettes. The selections persist locally.
+- A real Settings entry point is available from the main tab header gear. It opens a bottom sheet with Jellyfin reload/sign-out actions, theme/accent controls, visualizer diagnostics, and live visualizer permission access so settings remain reachable after the onboarding connection card hides.
 - JellyMix now defaults to dark theme with a teal Jelly accent, uses a defined 28/20/17/15/13 typography scale, stronger section/card hierarchy, low-emphasis secondary actions, generated gradient mix covers, initials-based missing-art fallbacks, denser adaptive track rows, and larger accessible row icon targets.
 - JellyMix visual affordances now use one accent model: teal for primary actions and active nav, desaturated teal tint for selected nav/chips, and red reserved for actual errors. Mix/Vibe card Play buttons are filled primary actions while Shuffle stays outlined, small-library mix notes render as neutral info rows, row/home/player like affordances consistently use hearts, phone subtitles render as one-line artist-first rows, the static JellyMix app bar was removed, and generated initials only appear on missing-art gradients with collision-aware short forms.
 - Library tab layout now orders search, browse segment, compact stats, Play/Shuffle actions, and list content so the actions apply to the selected browse segment. The stats panel renders Artists, Albums, and Tracks in one compact card without reserved blank space, and the segment row scrolls horizontally so Genres does not clip.
@@ -72,6 +74,7 @@ Done:
 - Recommendation, local play boost, generated mix differentiation/diversity, vibe feature-region classification, tab migration, Jarvis DJ prompt/mode handling, autoplay queue, search, discovery filter, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, cached library parsing, image tag detection, theme preference parsing, visualizer band tests, audio-analysis tests, and dedup/metadata cleanup tests exist in `app/src/test/java/com/smithware/jellymix/RecommendationTest.kt`.
 - `.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug :app:assembleProfile` passed on July 26, 2026 after the Plexamp-inspired visualizer/state and Library virtualization pass. Emulator launch of the profile APK reported cold start `TotalTime: 1492ms` after the row/artwork allocation pass and reduced the startup Choreographer burst from the debug build's roughly 97 skipped frames to 35 skipped frames, so phone testing should use the profile APK for performance feedback.
 - `.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug` and `.\gradlew.bat :app:assembleProfile` passed on July 26, 2026 after the playback-continuation fix.
+- `.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug` passed on July 26, 2026 after the phone crossfade playback handoff.
 
 Not done:
 
@@ -109,6 +112,7 @@ Published:
 - Performance jank release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.23-performance-jank`
 - Plexamp performance release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.24-plexamp-performance`
 - Continuation autoplay release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.25-continuation-autoplay`
+- Crossfade/settings release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.26-crossfade-settings`
 - Server reachability from the Windows workspace was confirmed for `http://www.badgerflix.win/System/Info/Public` and `https://www.badgerflix.win/System/Info/Public`; both returned BadgerFlix `10.11.11`. Phone-side library loading still needs verification.
 
 ## Immediate Next Blocker
