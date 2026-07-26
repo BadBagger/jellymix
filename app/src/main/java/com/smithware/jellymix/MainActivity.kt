@@ -104,6 +104,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -151,6 +152,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -292,6 +294,9 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     )
         private set
 
+    var playbackProgress by mutableFloatStateOf(state.currentTrack.completion.coerceIn(0f, 1f))
+        private set
+
     init {
         WidgetPlaybackBridge.register(widgetPlaybackController)
         if (state.token.isNotBlank() && state.userId.isNotBlank()) {
@@ -330,6 +335,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                     libraryLoaded = true,
                     status = if (stageForHome) "Ready from saved library. Full library loads when needed." else "Ready from saved library. Refreshing Jellyfin..."
                 )
+                playbackProgress = current.completion.coerceIn(0f, 1f)
                 preloadCurrentTrack()
                 viewModelScope.launch {
                     delay(8_000)
@@ -459,7 +465,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         runCatching {
             player?.seekTo((durationMs * clamped).toInt())
         }
-        state = state.copy(currentTrack = state.currentTrack.copy(completion = clamped))
+        playbackProgress = clamped
         refreshPlaybackNotification()
         persistPlaybackState()
     }
@@ -607,8 +613,9 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         val queue = if (state.queue.any { it.id == track.id }) state.queue else listOf(track)
         val queueTitle = if (state.queue.any { it.id == track.id }) state.queueTitle else "Selected track"
         state = state.copy(currentTrack = track, queue = queue, queueIndex = queueIndex, queueTitle = queueTitle)
+        playbackProgress = track.completion.coerceIn(0f, 1f)
         persistPlaybackState()
-        if (state.isPlaying) playCurrentTrack() else preloadCurrentTrack()
+        scheduleCurrentTrackLoad()
     }
 
     fun startQueue(title: String, tracks: List<Track>) {
@@ -625,8 +632,9 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             queueTitle = title,
             status = "Queued ${queue.size} tracks from $title."
         )
+        playbackProgress = queue.first().completion.coerceIn(0f, 1f)
         persistPlaybackState()
-        if (state.isPlaying) playCurrentTrack() else preloadCurrentTrack()
+        scheduleCurrentTrackLoad()
     }
 
     fun startShuffledQueue(title: String, tracks: List<Track>) {
@@ -645,8 +653,9 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             shuffleEnabled = true,
             status = "Shuffled ${queue.size} tracks from $title."
         )
+        playbackProgress = current.completion.coerceIn(0f, 1f)
         persistPlaybackState()
-        if (state.isPlaying) playCurrentTrack() else preloadCurrentTrack()
+        scheduleCurrentTrackLoad()
     }
 
     fun openPlaylist(playlist: JellyfinPlaylist) {
@@ -715,7 +724,10 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             persistPlaybackState()
             return
         }
-        playCurrentTrack()
+        viewModelScope.launch {
+            yield()
+            playCurrentTrack()
+        }
     }
 
     fun startRadioFromCurrent() {
@@ -758,7 +770,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             status = message
         )
         persistPlaybackState()
-        if (state.isPlaying) playCurrentTrack() else preloadCurrentTrack()
+        scheduleCurrentTrackLoad()
     }
 
     fun sendDjPrompt(promptOverride: String? = null) {
@@ -789,8 +801,9 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             djMessages = (state.djMessages + DjMessage("You", prompt) + DjMessage("Jarvis", reply)).takeLast(6),
             status = reply
         )
+        playbackProgress = current.completion.coerceIn(0f, 1f)
         persistPlaybackState()
-        if (state.isPlaying) playCurrentTrack() else preloadCurrentTrack()
+        scheduleCurrentTrackLoad()
     }
 
     fun toggleLike() {
@@ -846,8 +859,9 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             queueTitle = if (state.queue.isEmpty()) "Discovery queue" else state.queueTitle,
             status = "Queued ${previousTrack.title}."
         )
+        playbackProgress = previousTrack.completion.coerceIn(0f, 1f)
         persistPlaybackState()
-        if (state.isPlaying) playCurrentTrack() else preloadCurrentTrack()
+        scheduleCurrentTrackLoad()
     }
 
     fun stopPlayback() {
@@ -908,8 +922,9 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             queueIndex = currentIndex,
             status = "Removed ${removed.title} from the queue."
         )
+        if (wasCurrent) playbackProgress = nextCurrent.completion.coerceIn(0f, 1f)
         persistPlaybackState()
-        if (wasCurrent && state.isPlaying) playCurrentTrack() else preloadCurrentTrack()
+        if (wasCurrent) scheduleCurrentTrackLoad() else preloadCurrentTrack()
     }
 
     fun playNext(track: Track) {
@@ -1033,9 +1048,10 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             isPlaying = keepPlaying,
             status = if (!hadQueue || reachedEnd && !state.repeatEnabled) "Autoplaying ${nextTrack.title}." else "Queued ${nextTrack.title}."
         )
+        playbackProgress = nextTrack.completion.coerceIn(0f, 1f)
         persistPlaybackState()
         persistSignals()
-        if (state.isPlaying) playCurrentTrack() else preloadCurrentTrack()
+        scheduleCurrentTrackLoad()
     }
 
     private fun rankedPlayableTracks(tracks: List<Track>): List<Track> =
@@ -1121,6 +1137,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 )
                 persistPlaybackState()
                 startAudioVisualizer(preparedPlayer.audioSessionId)
+                preloadUpcomingTrack()
             }.onFailure { error ->
                 preparedPlayer.release()
                 player = null
@@ -1130,6 +1147,15 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             return
         }
         playCurrentTrackWithoutPreload(track, streamUrl)
+    }
+
+    private fun scheduleCurrentTrackLoad() {
+        val trackId = state.currentTrack.id
+        viewModelScope.launch {
+            yield()
+            if (state.currentTrack.id != trackId) return@launch
+            if (state.isPlaying) playCurrentTrack() else preloadCurrentTrack()
+        }
     }
 
     private fun playCurrentTrackWithoutPreload(track: Track, streamUrl: String) {
@@ -1157,6 +1183,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                     )
                     persistPlaybackState()
                     startAudioVisualizer(it.audioSessionId)
+                    preloadUpcomingTrack()
                 }
                 setOnCompletionListener {
                     handlePlaybackCompletion()
@@ -1223,9 +1250,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 val positionMs = runCatching { activePlayer?.currentPosition ?: 0 }.getOrDefault(0)
                 if (durationMs > 0 && positionMs >= 0) {
                     val progress = (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
-                    if (state.currentTrack.id == trackId) {
-                        state = state.copy(currentTrack = state.currentTrack.copy(completion = progress))
-                    }
+                    if (state.currentTrack.id == trackId) playbackProgress = progress
                     val remainingMs = durationMs - positionMs
                     if (
                         remainingMs in 1..CrossfadeTriggerRemainingMs &&
@@ -1284,6 +1309,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                     startAudioVisualizer(nextPlayer.audioSessionId)
                     fadeBetweenPlayers(oldPlayer, nextPlayer, nextTrack.id)
                     startPlaybackMonitor(nextTrack.id)
+                    preloadUpcomingTrack()
                 }
                 setOnErrorListener { _, _, _ ->
                     configureActivePlayer(oldPlayer, state.currentTrack)
@@ -1365,6 +1391,19 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     private fun preloadCurrentTrack() {
         val track = state.currentTrack
         if (state.isPlaying || state.token.isBlank() || track.id.startsWith("sample-")) return
+        preloadTrack(track)
+    }
+
+    private fun preloadUpcomingTrack() {
+        if (!state.isPlaying || state.token.isBlank()) return
+        val queue = state.queue
+        val nextTrack = queue.getOrNull(nextQueueIndex(state.queueIndex, queue.size, state.repeatEnabled))
+            ?.takeIf { it.id != state.currentTrack.id && !it.id.startsWith("sample-") }
+            ?: return
+        preloadTrack(nextTrack)
+    }
+
+    private fun preloadTrack(track: Track) {
         if (preloadedTrackId == track.id && preloadedPlayer != null) return
         releasePreloadedPlayer()
         val streamUrl = client.streamUrl(state.serverUrl, track.id, state.token)
@@ -1374,7 +1413,10 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 setAudioAttributes(musicAudioAttributes)
                 setDataSource(appContext, Uri.parse(streamUrl))
                 setOnPreparedListener {
-                    if (state.currentTrack.id != track.id || state.isPlaying) {
+                    val nextQueuedId = state.queue.getOrNull(nextQueueIndex(state.queueIndex, state.queue.size, state.repeatEnabled))?.id
+                    val isCurrentPausedPreload = !state.isPlaying && state.currentTrack.id == track.id
+                    val isUpcomingPlaybackPreload = state.isPlaying && nextQueuedId == track.id
+                    if (preloadedTrackId != track.id || (!isCurrentPausedPreload && !isUpcomingPlaybackPreload)) {
                         releasePreloadedPlayer()
                     }
                 }
@@ -1771,7 +1813,7 @@ private fun JellyMixApp(
         libraryVisibleTrackLimit = LibraryInitialVisibleTracks
     }
     val homeOnly = state.selectedTab == Tab.Home && !showNowPlaying
-    val needsFullMixes = showNowPlaying || state.selectedTab == Tab.Mixes
+    val needsFullMixes = state.selectedTab == Tab.Mixes && !showNowPlaying
     val needsFullRanking = needsFullMixes
     val rankedTracks = remember(homeOnly, needsFullRanking, state.tracks, state.liked, state.longListens, state.skips, state.localPlays) {
         when {
@@ -1934,6 +1976,7 @@ private fun JellyMixApp(
                     item(contentType = "now-playing") {
                         NowPlayingPage(
                             state = state,
+                            playbackProgressProvider = { viewModel.playbackProgress },
                             mixes = mixes,
                             frameBus = viewModel.visualizerFrameBus,
                             onPlayPause = viewModel::togglePlayPause,
@@ -2113,6 +2156,7 @@ private fun JellyMixApp(
             if (!showNowPlaying && showMiniPlayer) {
                 PlayerBar(
                     track = state.currentTrack,
+                    progressProvider = { viewModel.playbackProgress },
                     isPlaying = state.isPlaying,
                     queueLabel = state.queueLabel,
                     onPlayPause = viewModel::togglePlayPause,
@@ -3688,7 +3732,7 @@ private fun QueueSheet(
 ) {
     val suggestions = buildAutoplayQueue(
         seed = state.currentTrack,
-        tracks = state.tracks,
+        tracks = state.tracks.take(LibraryDiscoverySourceLimit),
         liked = state.liked,
         longListens = state.longListens,
         skips = state.skips,
@@ -3845,20 +3889,33 @@ private fun QueueReasonRow(track: Track, liked: Boolean, reason: String? = null,
 
 @Composable
 private fun AutoplayPreviewSection(state: JellyMixState, onTrackSelected: (Track) -> Unit) {
-    val preview = buildGuestDjQueue(
-        mode = state.djMode,
-        seed = state.currentTrack,
-        tracks = state.tracks,
-        liked = state.liked,
-        longListens = state.longListens,
-        skips = state.skips,
-        localPlays = state.localPlays,
-        recentlyPlayedIds = state.recentTrackIds
-    ).filterNot { track ->
-        track.id == state.currentTrack.id ||
-            state.queue.any { it.id == track.id && state.queue.indexOf(it) > state.queueIndex }
+    val previewSource = remember(state.tracks) { state.tracks.take(LibraryDiscoverySourceLimit) }
+    val queuedAhead = remember(state.queue, state.queueIndex) {
+        state.queue.drop((state.queueIndex + 1).coerceAtMost(state.queue.size)).map { it.id }.toSet()
     }
-        .take(4)
+    val preview = remember(
+        previewSource,
+        state.djMode,
+        state.currentTrack.id,
+        state.liked,
+        state.longListens,
+        state.skips,
+        state.localPlays,
+        state.recentTrackIds,
+        queuedAhead
+    ) {
+        buildGuestDjQueue(
+            mode = state.djMode,
+            seed = state.currentTrack,
+            tracks = previewSource,
+            liked = state.liked,
+            longListens = state.longListens,
+            skips = state.skips,
+            localPlays = state.localPlays,
+            recentlyPlayedIds = state.recentTrackIds
+        ).filterNot { track -> track.id == state.currentTrack.id || track.id in queuedAhead }
+            .take(4)
+    }
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Autoplay preview", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
@@ -4002,6 +4059,7 @@ private fun StatCard(label: String, value: String, modifier: Modifier = Modifier
 @Composable
 private fun NowPlayingPage(
     state: JellyMixState,
+    playbackProgressProvider: () -> Float,
     mixes: List<Mix>,
     frameBus: VisualizerFrameBus,
     onPlayPause: () -> Unit,
@@ -4046,7 +4104,7 @@ private fun NowPlayingPage(
                     Text(track.artist, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(track.album, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
-                NowPlayingProgress(track = track, onSeek = onSeek)
+                NowPlayingProgress(track = track, progressProvider = playbackProgressProvider, onSeek = onSeek)
                 Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                     DrivingControlButton(
                         icon = Icons.Filled.SkipPrevious,
@@ -4126,6 +4184,7 @@ private fun NowPlayingPage(
             track = track,
             frame = state.audioFrame,
             frameBus = frameBus,
+            playbackProgressProvider = playbackProgressProvider,
             isPlaying = state.isPlaying,
             debugOverlay = state.visualizerDebugOverlay,
             onPrevious = onPrevious,
@@ -4207,6 +4266,7 @@ private fun FullscreenVisualizerDialog(
     track: Track,
     frame: AudioAnalysisFrame,
     frameBus: VisualizerFrameBus,
+    playbackProgressProvider: () -> Float,
     isPlaying: Boolean,
     debugOverlay: Boolean,
     onPrevious: () -> Unit,
@@ -4315,7 +4375,7 @@ private fun FullscreenVisualizerDialog(
                         Text(mode.label(), color = Color.White.copy(alpha = 0.72f), style = MaterialTheme.typography.labelMedium)
                     }
                     Slider(
-                        value = track.completion.coerceIn(0f, 1f),
+                        value = playbackProgressProvider().coerceIn(0f, 1f),
                         onValueChange = onSeek,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -4336,8 +4396,8 @@ private fun FullscreenVisualizerDialog(
 }
 
 @Composable
-private fun NowPlayingProgress(track: Track, onSeek: (Float) -> Unit) {
-    val progress = track.completion.coerceIn(0f, 1f)
+private fun NowPlayingProgress(track: Track, progressProvider: () -> Float, onSeek: (Float) -> Unit) {
+    val progress = progressProvider().coerceIn(0f, 1f)
     val elapsedSec = (track.durationSec * progress).roundToInt().coerceIn(0, track.durationSec)
     val remainingSec = (track.durationSec - elapsedSec).coerceAtLeast(0)
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -4414,6 +4474,7 @@ private fun DrivingControlButton(
 @Composable
 private fun PlayerBar(
     track: Track,
+    progressProvider: () -> Float,
     isPlaying: Boolean,
     queueLabel: String,
     onPlayPause: () -> Unit,
@@ -4494,7 +4555,7 @@ private fun PlayerBar(
                 IconButton(onClick = onPlayPause) { Icon(if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, contentDescription = if (isPlaying) "Pause" else "Play") }
                 IconButton(onClick = onSkip) { Icon(Icons.Filled.SkipNext, contentDescription = "Next") }
             }
-            LinearProgressIndicator(progress = { track.completion.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(2.dp))
+            LinearProgressIndicator(progress = { progressProvider().coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(2.dp))
         }
     }
 }
