@@ -80,7 +80,8 @@ class RecommendationTest {
             liked = tracks.associate { it.id to it.liked },
             longListens = emptyMap(),
             skips = emptyMap(),
-            localPlays = emptyMap()
+            localPlays = emptyMap(),
+            daySeed = "2026-07-25"
         )
         val quickShuffle = mixes.first { it.name == "Quick Shuffle" }
         val heavyRotation = mixes.first { it.name == "Heavy Rotation" }
@@ -169,6 +170,43 @@ class RecommendationTest {
 
         assertEquals("similar", autoplay.first().id)
         assertTrue(autoplay.none { it.id == "seed" })
+    }
+
+    @Test
+    fun continuationQueueFallsBackToFullLibraryWhenStagedTracksOnlyContainSeed() {
+        val seed = sampleTrack("seed", liked = true, plays = 10, completion = 0.9f).copy(mood = "Late", genre = "Synth")
+        val next = sampleTrack("next", liked = false, plays = 1, completion = 0.5f).copy(mood = "Warm", genre = "Indie")
+
+        val continuation = buildContinuationQueue(
+            seed = seed,
+            tracks = listOf(seed),
+            fallbackTracks = listOf(seed, next),
+            liked = emptyMap(),
+            longListens = emptyMap(),
+            skips = emptyMap(),
+            localPlays = emptyMap(),
+            recentlyPlayedIds = listOf(seed.id)
+        )
+
+        assertEquals(listOf("next"), continuation.map { it.id })
+    }
+
+    @Test
+    fun continuationQueueNeverReturnsEmptyEvenForSingleTrackLibraries() {
+        val seed = sampleTrack("seed", liked = true, plays = 10, completion = 0.9f)
+
+        val continuation = buildContinuationQueue(
+            seed = seed,
+            tracks = listOf(seed),
+            fallbackTracks = listOf(seed),
+            liked = emptyMap(),
+            longListens = emptyMap(),
+            skips = emptyMap(),
+            localPlays = emptyMap(),
+            recentlyPlayedIds = listOf(seed.id)
+        )
+
+        assertEquals(listOf("seed"), continuation.map { it.id })
     }
 
     @Test

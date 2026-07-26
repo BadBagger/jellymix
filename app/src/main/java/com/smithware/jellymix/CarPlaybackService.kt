@@ -136,9 +136,10 @@ class CarPlaybackService : MediaBrowserService() {
             if (queue.isEmpty()) queue = buildDefaultQueue()
             if (queueIndex >= queue.lastIndex) {
                 val seed = queue.getOrNull(queueIndex) ?: currentSeed()
-                queue = buildAutoplayQueue(
+                queue = buildContinuationQueue(
                     seed = seed,
                     tracks = tracks.ifEmpty { sampleTracks },
+                    fallbackTracks = tracks.ifEmpty { sampleTracks },
                     liked = boolPrefs("liked"),
                     longListens = intPrefs("longListens"),
                     skips = intPrefs("skips"),
@@ -219,9 +220,10 @@ class CarPlaybackService : MediaBrowserService() {
             setOnCompletionListener {
                 persistCarPlaying(false)
                 if (queueIndex >= queue.lastIndex) {
-                    queue = buildAutoplayQueue(
+                    queue = buildContinuationQueue(
                         seed = track,
                         tracks = tracks.ifEmpty { sampleTracks },
+                        fallbackTracks = tracks.ifEmpty { sampleTracks },
                         liked = boolPrefs("liked"),
                         longListens = intPrefs("longListens"),
                         skips = intPrefs("skips"),

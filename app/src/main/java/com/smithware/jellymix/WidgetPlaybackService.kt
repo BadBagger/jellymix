@@ -74,9 +74,10 @@ class WidgetPlaybackService : Service() {
             queue = buildDefaultQueue()
             queueIndex = 0
         } else if (queueIndex >= queue.lastIndex) {
-            queue = buildAutoplayQueue(
+            queue = buildContinuationQueue(
                 seed = queue.getOrNull(queueIndex) ?: currentSeed(),
                 tracks = tracks.ifEmpty { sampleTracks },
+                fallbackTracks = tracks.ifEmpty { sampleTracks },
                 liked = boolPrefs("liked"),
                 longListens = intPrefs("longListens"),
                 skips = intPrefs("skips"),

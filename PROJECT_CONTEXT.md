@@ -31,6 +31,7 @@ Done:
 - Mixes, generated playlist cards, and the full library expose explicit Play and Shuffle controls.
 - Mixes and loaded playlists can start a queue. Skip is queue-aware. Player controls include shuffle and repeat queue toggles.
 - Playback completion advances through the active queue, marks long listens, and starts an autoplay radio queue when the queue ends instead of stopping or looping the same song.
+- Playback continuation is hardened across the phone app, widget service, and Android Auto service: when a one-song or exhausted queue finishes, JellyMix builds a non-empty continuation queue from the full cached library when available, excludes the just-finished song first, and only falls back to repeating the seed when the entire available library has no other track.
 - Track radio builds a queue from the current song using mood, genre, artist, and local listening signals. Demo playback now pauses correctly.
 - Up Next and clear-queue controls exist. Clear session removes the saved Jellyfin token and returns the app to demo mode.
 - Home is now a music-first surface with Continue Listening, a max-six speed-dial shortcut grid, recently played, and heavy rotation. Connection/search/status panels no longer consume the first Home viewport.
@@ -70,6 +71,7 @@ Done:
 - The mini player is a compact expandable playback bar with title marquee, artist subtitle, queue label, previous/play-next controls only, swipe up/down to expand/dismiss, swipe left/right to skip previous/next, and a thin bottom-edge progress line. Shuffle, repeat, and like live in expanded Now Playing.
 - Recommendation, local play boost, generated mix differentiation/diversity, vibe feature-region classification, tab migration, Jarvis DJ prompt/mode handling, autoplay queue, search, discovery filter, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, cached library parsing, image tag detection, theme preference parsing, visualizer band tests, audio-analysis tests, and dedup/metadata cleanup tests exist in `app/src/test/java/com/smithware/jellymix/RecommendationTest.kt`.
 - `.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug :app:assembleProfile` passed on July 26, 2026 after the Plexamp-inspired visualizer/state and Library virtualization pass. Emulator launch of the profile APK reported cold start `TotalTime: 1492ms` after the row/artwork allocation pass and reduced the startup Choreographer burst from the debug build's roughly 97 skipped frames to 35 skipped frames, so phone testing should use the profile APK for performance feedback.
+- `.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug` and `.\gradlew.bat :app:assembleProfile` passed on July 26, 2026 after the playback-continuation fix.
 
 Not done:
 
@@ -106,6 +108,7 @@ Published:
 - Feedback tunnel visualizer release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.20-feedback-tunnel`
 - Performance jank release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.23-performance-jank`
 - Plexamp performance release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.24-plexamp-performance`
+- Continuation autoplay release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.25-continuation-autoplay`
 - Server reachability from the Windows workspace was confirmed for `http://www.badgerflix.win/System/Info/Public` and `https://www.badgerflix.win/System/Info/Public`; both returned BadgerFlix `10.11.11`. Phone-side library loading still needs verification.
 
 ## Immediate Next Blocker

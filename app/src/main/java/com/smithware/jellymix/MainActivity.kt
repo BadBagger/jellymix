@@ -964,12 +964,14 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         if (countSkip) {
             state = state.copy(skips = state.skips + (currentId to ((state.skips[currentId] ?: 0) + 1)))
         }
-        val fallbackQueue = state.rankedTracks()
+        val playbackTracks = fullLibrarySnapshot?.tracks?.takeIf { it.isNotEmpty() } ?: state.tracks
+        val fallbackQueue = rankedPlayableTracks(playbackTracks)
         val hadQueue = state.queue.isNotEmpty()
         val queue = state.queue.ifEmpty {
-            buildAutoplayQueue(
+            buildContinuationQueue(
                 seed = state.currentTrack,
-                tracks = state.tracks,
+                tracks = playbackTracks,
+                fallbackTracks = fallbackQueue,
                 liked = state.liked,
                 longListens = state.longListens,
                 skips = state.skips,
@@ -979,9 +981,10 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         }
         val reachedEnd = hadQueue && isQueueEnd(state.queueIndex, queue.size, state.repeatEnabled)
         val nextQueue = if (reachedEnd && !state.repeatEnabled) {
-            buildAutoplayQueue(
+            buildContinuationQueue(
                 seed = state.currentTrack,
-                tracks = state.tracks,
+                tracks = playbackTracks,
+                fallbackTracks = fallbackQueue,
                 liked = state.liked,
                 longListens = state.longListens,
                 skips = state.skips,
@@ -1009,6 +1012,17 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         persistSignals()
         if (state.isPlaying) playCurrentTrack() else preloadCurrentTrack()
     }
+
+    private fun rankedPlayableTracks(tracks: List<Track>): List<Track> =
+        deduplicateTracks(tracks).sortedByDescending { track ->
+            recommendationScore(
+                track = track,
+                liked = state.liked.isLiked(track),
+                longListens = state.longListens[track.id] ?: 0,
+                skips = state.skips[track.id] ?: 0,
+                localPlays = state.localPlays[track.id] ?: 0
+            )
+        }.ifEmpty { sampleTracks }
 
     fun toggleShuffle() {
         val current = state.currentTrack
@@ -5080,6 +5094,32 @@ internal fun buildAutoplayQueue(
             )
         }
     return ranked.ifEmpty { library.filterNot { it.id == seed.id } }.artistDiverseTake(50)
+}
+
+internal fun buildContinuationQueue(
+    seed: Track,
+    tracks: List<Track>,
+    fallbackTracks: List<Track>,
+    liked: Map<String, Boolean>,
+    longListens: Map<String, Int>,
+    skips: Map<String, Int>,
+    localPlays: Map<String, Int>,
+    recentlyPlayedIds: List<String>
+): List<Track> {
+    val autoplay = buildAutoplayQueue(
+        seed = seed,
+        tracks = tracks,
+        liked = liked,
+        longListens = longListens,
+        skips = skips,
+        localPlays = localPlays,
+        recentlyPlayedIds = recentlyPlayedIds
+    )
+    if (autoplay.isNotEmpty()) return autoplay
+
+    val fallback = deduplicateTracks(fallbackTracks.ifEmpty { tracks })
+    val differentTracks = fallback.filterNot { it.id == seed.id }
+    return differentTracks.ifEmpty { fallback }.take(50)
 }
 
 private fun List<Track>.artistDiverseTake(maxCount: Int): List<Track> {
