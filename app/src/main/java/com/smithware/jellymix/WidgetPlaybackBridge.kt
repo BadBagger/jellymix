@@ -5,6 +5,8 @@ import android.os.Looper
 
 interface WidgetPlaybackController {
     fun togglePlayPause()
+    fun play()
+    fun pause()
     fun skip()
     fun previous()
     fun stopPlayback()
@@ -31,6 +33,8 @@ object WidgetPlaybackBridge {
         mainHandler.post {
             when (action) {
                 WIDGET_ACTION_PLAY_PAUSE -> activeController.togglePlayPause()
+                WIDGET_ACTION_PLAY -> activeController.play()
+                WIDGET_ACTION_PAUSE -> activeController.pause()
                 WIDGET_ACTION_SKIP -> activeController.skip()
                 WIDGET_ACTION_PREVIOUS -> activeController.previous()
                 WIDGET_ACTION_STOP -> activeController.stopPlayback()
@@ -38,6 +42,8 @@ object WidgetPlaybackBridge {
         }
         return action in setOf(
             WIDGET_ACTION_PLAY_PAUSE,
+            WIDGET_ACTION_PLAY,
+            WIDGET_ACTION_PAUSE,
             WIDGET_ACTION_SKIP,
             WIDGET_ACTION_PREVIOUS,
             WIDGET_ACTION_STOP

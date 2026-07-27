@@ -38,6 +38,8 @@ class WidgetPlaybackService : Service() {
         }
         when (intent?.action) {
             WIDGET_ACTION_PLAY_PAUSE -> togglePlayback()
+            WIDGET_ACTION_PLAY -> playFromExternalControl()
+            WIDGET_ACTION_PAUSE -> pauseFromExternalControl()
             WIDGET_ACTION_SKIP -> skip()
             WIDGET_ACTION_PREVIOUS -> previous()
             WIDGET_ACTION_STOP -> stopPlayback()
@@ -56,17 +58,26 @@ class WidgetPlaybackService : Service() {
     private fun togglePlayback() {
         val activePlayer = player
         if (activePlayer?.isPlaying == true || prefs.getBoolean("isPlaying", false)) {
-            activePlayer?.pause()
-            persistPlaybackFlag(false)
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            pauseFromExternalControl()
             return
         }
+        playFromExternalControl()
+    }
+
+    private fun playFromExternalControl() {
+        if (player?.isPlaying == true || prefs.getBoolean("isPlaying", false)) return
         if (queue.isEmpty()) {
             queue = buildDefaultQueue()
             queueIndex = 0
         }
         playCurrent()
+    }
+
+    private fun pauseFromExternalControl() {
+        player?.pause()
+        persistPlaybackFlag(false)
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     private fun skip() {

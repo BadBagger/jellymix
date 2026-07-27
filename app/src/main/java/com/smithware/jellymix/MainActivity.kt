@@ -161,6 +161,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 internal const val WIDGET_ACTION_PLAY_PAUSE = "com.smithware.jellymix.widget.PLAY_PAUSE"
+internal const val WIDGET_ACTION_PLAY = "com.smithware.jellymix.widget.PLAY"
+internal const val WIDGET_ACTION_PAUSE = "com.smithware.jellymix.widget.PAUSE"
 internal const val WIDGET_ACTION_SKIP = "com.smithware.jellymix.widget.SKIP"
 internal const val WIDGET_ACTION_PREVIOUS = "com.smithware.jellymix.widget.PREVIOUS"
 internal const val WIDGET_ACTION_STOP = "com.smithware.jellymix.widget.STOP"
@@ -224,6 +226,8 @@ class MainActivity : ComponentActivity() {
     private fun handleWidgetAction(intent: Intent?) {
         when (intent?.action) {
             WIDGET_ACTION_PLAY_PAUSE -> viewModel.togglePlayPause()
+            WIDGET_ACTION_PLAY -> viewModel.playFromExternalControl()
+            WIDGET_ACTION_PAUSE -> viewModel.pauseFromExternalControl()
             WIDGET_ACTION_SKIP -> viewModel.skip()
             WIDGET_ACTION_PREVIOUS -> viewModel.previous()
             WIDGET_ACTION_STOP -> viewModel.stopPlayback()
@@ -256,6 +260,8 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         .build()
     private val widgetPlaybackController = object : WidgetPlaybackController {
         override fun togglePlayPause() = this@JellyMixViewModel.togglePlayPause()
+        override fun play() = this@JellyMixViewModel.playFromExternalControl()
+        override fun pause() = this@JellyMixViewModel.pauseFromExternalControl()
         override fun skip() = this@JellyMixViewModel.skip()
         override fun previous() = this@JellyMixViewModel.previous()
         override fun stopPlayback() = this@JellyMixViewModel.stopPlayback()
@@ -734,6 +740,14 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             yield()
             playCurrentTrack()
         }
+    }
+
+    fun playFromExternalControl() {
+        if (!state.isPlaying) togglePlayPause()
+    }
+
+    fun pauseFromExternalControl() {
+        if (state.isPlaying) togglePlayPause()
     }
 
     fun startRadioFromCurrent() {
