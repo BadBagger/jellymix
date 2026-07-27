@@ -642,7 +642,8 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             queue = queue,
             queueIndex = 0,
             queueTitle = title,
-            status = "Queued ${queue.size} tracks from $title."
+            isPlaying = true,
+            status = "Starting $title."
         )
         playbackProgress = queue.first().completion.coerceIn(0f, 1f)
         persistPlaybackState()
@@ -663,7 +664,8 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             queueIndex = 0,
             queueTitle = "$title shuffle",
             shuffleEnabled = true,
-            status = "Shuffled ${queue.size} tracks from $title."
+            isPlaying = true,
+            status = "Starting $title shuffle."
         )
         playbackProgress = current.completion.coerceIn(0f, 1f)
         persistPlaybackState()
@@ -702,6 +704,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                     status = "Loaded ${canonicalPlaylistTracks.size} deduped tracks from ${playlistTracks.size} playlist items."
                 )
                 persistSignals()
+                startQueue(playlist.name, canonicalPlaylistTracks)
             }.onFailure { error ->
                 state = state.copy(isLoading = false, status = "Playlist load failed: ${error.cleanMessage()}")
             }

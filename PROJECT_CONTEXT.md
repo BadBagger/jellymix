@@ -30,6 +30,7 @@ Done:
 - Generated mixes include Weekly Discovery, Heavy Rotation, Long Listen Mix, Quick Shuffle, Rediscover, Liked Radio, Library Radio, and Loud Flow. Each mix now uses a distinct primary signal, daily seeded tie-breaking, cross-mix overlap limits, max artist/album limits, and a defined small-library relaxation path.
 - Mixes, generated playlist cards, and the full library expose explicit Play and Shuffle controls.
 - Mixes and loaded playlists can start a queue. Skip is queue-aware. Player controls include shuffle and repeat queue toggles.
+- Tapping a generated mix, vibe mix, library group Play, Library Play all, Shuffle, or a loaded Jellyfin playlist now starts playback immediately from the first selected track instead of only loading a queue and requiring a second Play tap.
 - Playback completion advances through the active queue, marks long listens, and starts an autoplay radio queue when the queue ends instead of stopping or looping the same song.
 - Playback continuation is hardened across the phone app, widget service, and Android Auto service: when a one-song or exhausted queue finishes, JellyMix builds a non-empty continuation queue from the full cached library when available, excludes the just-finished song first, and only falls back to repeating the seed when the entire available library has no other track.
 - Phone playback now has an automatic near-end crossfade: a lightweight playback monitor starts the next continuation track before completion, fades the old `MediaPlayer` down and the new one up over about 2.8 seconds, and guards old-player completion so the queue does not advance twice.
@@ -131,6 +132,7 @@ Published:
 - Fast manual skip release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.33-fast-manual-skip`
 - Media notification controls release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.34-media-notification-controls`
 - Widget polish release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.35-widget-polish`
+- Autoplay mix/playlist tap release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.36-autoplay-playlists`
 - Server reachability from the Windows workspace was confirmed for `http://www.badgerflix.win/System/Info/Public` and `https://www.badgerflix.win/System/Info/Public`; both returned BadgerFlix `10.11.11`. Phone-side library loading still needs verification.
 
 ## Immediate Next Blocker
