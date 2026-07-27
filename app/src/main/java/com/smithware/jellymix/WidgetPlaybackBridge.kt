@@ -10,6 +10,10 @@ interface WidgetPlaybackController {
     fun skip()
     fun previous()
     fun stopPlayback()
+    fun like()
+    fun shuffle()
+    fun repeat()
+    fun seekTo(positionMs: Long)
 }
 
 object WidgetPlaybackBridge {
@@ -38,6 +42,9 @@ object WidgetPlaybackBridge {
                 WIDGET_ACTION_SKIP -> activeController.skip()
                 WIDGET_ACTION_PREVIOUS -> activeController.previous()
                 WIDGET_ACTION_STOP -> activeController.stopPlayback()
+                WIDGET_ACTION_LIKE -> activeController.like()
+                WIDGET_ACTION_SHUFFLE -> activeController.shuffle()
+                WIDGET_ACTION_REPEAT -> activeController.repeat()
             }
         }
         return action in setOf(
@@ -46,7 +53,16 @@ object WidgetPlaybackBridge {
             WIDGET_ACTION_PAUSE,
             WIDGET_ACTION_SKIP,
             WIDGET_ACTION_PREVIOUS,
-            WIDGET_ACTION_STOP
+            WIDGET_ACTION_STOP,
+            WIDGET_ACTION_LIKE,
+            WIDGET_ACTION_SHUFFLE,
+            WIDGET_ACTION_REPEAT
         )
+    }
+
+    fun seekTo(positionMs: Long): Boolean {
+        val activeController = controller ?: return false
+        mainHandler.post { activeController.seekTo(positionMs) }
+        return true
     }
 }

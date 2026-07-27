@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
@@ -20,12 +21,18 @@ import android.media.MediaMetadata
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import kotlin.math.absoluteValue
 
 private const val PLAYBACK_CHANNEL_ID = "jellymix_playback"
 private const val PLAYBACK_NOTIFICATION_ID = 1001
 
 class PlaybackNotificationController(private val context: Context) {
     private val notificationManager = context.getSystemService(NotificationManager::class.java)
+    @Volatile
+    private var artworkFetchKey: String? = null
     private val session = MediaSession(context, "JellyMixPlaybackSession").apply {
         setCallback(
             object : MediaSession.Callback() {
@@ -34,6 +41,9 @@ class PlaybackNotificationController(private val context: Context) {
                 override fun onSkipToNext() = dispatchTransport(WIDGET_ACTION_SKIP)
                 override fun onSkipToPrevious() = dispatchTransport(WIDGET_ACTION_PREVIOUS)
                 override fun onStop() = dispatchTransport(WIDGET_ACTION_STOP)
+                override fun onSeekTo(pos: Long) {
+                    if (!WidgetPlaybackBridge.seekTo(pos)) dispatchSeekFallback(pos)
+                }
             }
         )
         isActive = true
@@ -45,6 +55,7 @@ class PlaybackNotificationController(private val context: Context) {
         session.isActive = true
         updateSession(state, positionMs)
         notificationManager.notify(PLAYBACK_NOTIFICATION_ID, buildNotification(state))
+        fetchArtworkIfNeeded(state, positionMs)
     }
 
     fun cancel() {
@@ -62,11 +73,12 @@ class PlaybackNotificationController(private val context: Context) {
         val artwork = notificationArtwork(track)
         val playPauseLabel = if (state.isPlaying) "Pause" else "Play"
         val playPauseIcon = if (state.isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
+        val liked = state.liked[track.id] ?: track.liked
         return Notification.Builder(context, PLAYBACK_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentTitle(track.title)
-            .setContentText(track.subtitle().text.ifBlank { track.artist.ifBlank { "JellyMix" } })
-            .setSubText("JellyMix" + state.queueTitle.takeIf { it.isNotBlank() }?.let { " • $it" }.orEmpty())
+            .setContentText(track.artist.ifBlank { "Unknown artist" })
+            .setSubText(track.album.ifBlank { "JellyMix" })
             .setLargeIcon(artwork)
             .setContentIntent(activityIntent(requestCode = 0, action = null))
             .setVisibility(Notification.VISIBILITY_PUBLIC)
@@ -77,14 +89,16 @@ class PlaybackNotificationController(private val context: Context) {
             .setPriority(Notification.PRIORITY_LOW)
             .setColor(0xFF1DE9B6.toInt())
             .setColorized(false)
+            .addAction(notificationAction(android.R.drawable.btn_star_big_off, if (liked) "Liked" else "Like", WIDGET_ACTION_LIKE, 5))
             .addAction(notificationAction(android.R.drawable.ic_media_previous, "Previous", WIDGET_ACTION_PREVIOUS, 1))
             .addAction(notificationAction(playPauseIcon, playPauseLabel, WIDGET_ACTION_PLAY_PAUSE, 2))
             .addAction(notificationAction(android.R.drawable.ic_media_next, "Next", WIDGET_ACTION_SKIP, 3))
+            .addAction(notificationAction(android.R.drawable.ic_menu_sort_by_size, if (state.shuffleEnabled) "Shuffle on" else "Shuffle", WIDGET_ACTION_SHUFFLE, 6))
             .setDeleteIntent(playbackServiceIntent(4, WIDGET_ACTION_STOP))
             .setStyle(
                 Notification.MediaStyle()
                     .setMediaSession(session.sessionToken)
-                    .setShowActionsInCompactView(0, 1, 2)
+                    .setShowActionsInCompactView(1, 2, 3)
             )
             .build()
     }
@@ -98,6 +112,7 @@ class PlaybackNotificationController(private val context: Context) {
                 .putString(MediaMetadata.METADATA_KEY_TITLE, track.title)
                 .putString(MediaMetadata.METADATA_KEY_ARTIST, track.artist)
                 .putString(MediaMetadata.METADATA_KEY_ALBUM, track.album)
+                .putString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST, track.artist)
                 .putBitmap(MediaMetadata.METADATA_KEY_ART, artwork)
                 .putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artwork)
                 .putLong(MediaMetadata.METADATA_KEY_DURATION, track.durationSec * 1000L)
@@ -112,6 +127,7 @@ class PlaybackNotificationController(private val context: Context) {
                         PlaybackState.ACTION_PLAY_PAUSE or
                         PlaybackState.ACTION_SKIP_TO_PREVIOUS or
                         PlaybackState.ACTION_SKIP_TO_NEXT or
+                        PlaybackState.ACTION_SEEK_TO or
                         PlaybackState.ACTION_STOP
                 )
                 .setState(playbackState, positionMs.coerceAtLeast(0L), if (state.isPlaying) 1f else 0f)
@@ -123,6 +139,16 @@ class PlaybackNotificationController(private val context: Context) {
         if (!WidgetPlaybackBridge.dispatch(action)) {
             startPlaybackService(action)
         }
+    }
+
+    private fun dispatchSeekFallback(positionMs: Long) {
+        val prefs = context.getSharedPreferences("jellymix", Context.MODE_PRIVATE)
+        val currentTrackId = prefs.getString("currentTrackId", null).orEmpty()
+        if (currentTrackId.isBlank()) return
+        prefs.edit()
+            .putString("playbackPositionTrackId", currentTrackId)
+            .putLong("playbackPositionMs", positionMs.coerceAtLeast(0L))
+            .apply()
     }
 
     private fun notificationAction(iconRes: Int, label: String, action: String, requestCode: Int): Notification.Action =
@@ -168,6 +194,7 @@ class PlaybackNotificationController(private val context: Context) {
     }
 
     private fun notificationArtwork(track: Track): Bitmap {
+        decodedJellyfinArtwork(track)?.let { return it }
         val size = 256
         val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
@@ -196,6 +223,57 @@ class PlaybackNotificationController(private val context: Context) {
         canvas.drawText(text, size / 2f, size / 2f - bounds.exactCenterY(), textPaint)
         return bitmap
     }
+
+    private fun decodedJellyfinArtwork(track: Track): Bitmap? {
+        val imageUrl = track.imageUrl?.takeIf { it.isNotBlank() } ?: return null
+        val cacheFile = artworkCacheFile(track, imageUrl)
+        if (cacheFile.exists() && cacheFile.length() > 0L) {
+            BitmapFactory.decodeFile(cacheFile.absolutePath)?.let { return it }
+        }
+        return null
+    }
+
+    private fun fetchArtworkIfNeeded(state: JellyMixState, positionMs: Long) {
+        val track = state.currentTrack
+        val imageUrl = track.imageUrl?.takeIf { it.isNotBlank() } ?: return
+        val cacheFile = artworkCacheFile(track, imageUrl)
+        if (cacheFile.exists() && cacheFile.length() > 0L) return
+        val fetchKey = "${track.id}:$imageUrl"
+        if (artworkFetchKey == fetchKey) return
+        artworkFetchKey = fetchKey
+        Thread {
+            val fetched = runCatching {
+                downloadArtwork(cacheFile, imageUrl)
+            }.getOrDefault(false)
+            if (fetched) {
+                updateSession(state, positionMs)
+                notificationManager.notify(PLAYBACK_NOTIFICATION_ID, buildNotification(state))
+            }
+            if (artworkFetchKey == fetchKey) artworkFetchKey = null
+        }.apply {
+            name = "JellyMixNotificationArt"
+            isDaemon = true
+        }.start()
+    }
+
+    private fun downloadArtwork(cacheFile: File, imageUrl: String): Boolean {
+        val connection = URL(imageUrl).openConnection() as HttpURLConnection
+        connection.connectTimeout = 2_500
+        connection.readTimeout = 3_500
+        return try {
+            if (connection.responseCode !in 200..299) return false
+            val bytes = connection.inputStream.use { it.readBytes() }
+            if (bytes.isEmpty()) return false
+            cacheFile.parentFile?.mkdirs()
+            cacheFile.writeBytes(bytes)
+            true
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun artworkCacheFile(track: Track, imageUrl: String): File =
+        File(File(context.cacheDir, "notification-art"), "${track.id.safeOfflineFileName()}-${imageUrl.hashCode().absoluteValue}.jpg")
 
     private fun mixColor(base: Int, seed: Int): Int {
         val shift = ((seed and 0x7fffffff) % 44) - 22

@@ -52,6 +52,9 @@ class WidgetPlaybackService : Service() {
             WIDGET_ACTION_SKIP -> skip()
             WIDGET_ACTION_PREVIOUS -> previous()
             WIDGET_ACTION_STOP -> stopPlayback()
+            WIDGET_ACTION_LIKE -> toggleCurrentLike()
+            WIDGET_ACTION_SHUFFLE -> toggleShuffleFlag()
+            WIDGET_ACTION_REPEAT -> toggleRepeatFlag()
         }
         return START_NOT_STICKY
     }
@@ -124,6 +127,28 @@ class WidgetPlaybackService : Service() {
         player?.release()
         player = null
         persistPlaybackFlag(false)
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
+    private fun toggleCurrentLike() {
+        val track = queue.getOrNull(queueIndex) ?: currentSeed()
+        val liked = boolPrefs("liked").toMutableMap()
+        liked[track.id] = !(liked[track.id] ?: track.liked)
+        prefs.edit().putString("liked", liked.toStorageString()).apply()
+        JellyMixWidgetProvider.updateAll(this)
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
+    private fun toggleShuffleFlag() {
+        prefs.edit().putBoolean("shuffleEnabled", !prefs.getBoolean("shuffleEnabled", false)).apply()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
+    private fun toggleRepeatFlag() {
+        prefs.edit().putBoolean("repeatEnabled", !prefs.getBoolean("repeatEnabled", false)).apply()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }

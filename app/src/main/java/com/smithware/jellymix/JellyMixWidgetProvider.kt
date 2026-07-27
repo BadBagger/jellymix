@@ -70,7 +70,7 @@ open class JellyMixWidgetProvider(
                 setTextViewText(R.id.widgetTitle, current.title)
                 setTextViewText(R.id.widgetArtist, subtitle.ifBlank { current.artist.ifBlank { "JellyMix" } })
                 setTextViewText(R.id.widgetAlbum, current.album.ifBlank { "JellyMix" })
-                setTextViewText(R.id.widgetContext, if (isConnected) "Jellyfin music" else "Tap to connect")
+                setTextViewText(R.id.widgetContext, if (isConnected) "JellyMix" else "Tap to connect")
                 setTextViewText(R.id.widgetPlayButton, if (isPlaying) "\u23F8" else "\u25B6")
                 setImageViewBitmap(R.id.widgetArtwork, artwork)
                 setContentDescription(R.id.widgetPreviousButton, context.getString(R.string.widget_previous_description))

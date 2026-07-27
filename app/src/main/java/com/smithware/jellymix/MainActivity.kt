@@ -170,6 +170,9 @@ internal const val WIDGET_ACTION_PREVIOUS = "com.smithware.jellymix.widget.PREVI
 internal const val WIDGET_ACTION_STOP = "com.smithware.jellymix.widget.STOP"
 internal const val WIDGET_ACTION_KEEP_ALIVE = "com.smithware.jellymix.widget.KEEP_ALIVE"
 internal const val WIDGET_ACTION_RELEASE_KEEP_ALIVE = "com.smithware.jellymix.widget.RELEASE_KEEP_ALIVE"
+internal const val WIDGET_ACTION_LIKE = "com.smithware.jellymix.widget.LIKE"
+internal const val WIDGET_ACTION_SHUFFLE = "com.smithware.jellymix.widget.SHUFFLE"
+internal const val WIDGET_ACTION_REPEAT = "com.smithware.jellymix.widget.REPEAT"
 private const val DefaultJarvisPrompt = "Tell me what you want to hear. I can go deeper, keep it familiar, make it louder, chill it out, or build around an artist."
 private const val CrossfadeDurationMs = 2_800L
 private const val CrossfadeTriggerRemainingMs = 3_400L
@@ -236,6 +239,9 @@ class MainActivity : ComponentActivity() {
             WIDGET_ACTION_SKIP -> viewModel.skip()
             WIDGET_ACTION_PREVIOUS -> viewModel.previous()
             WIDGET_ACTION_STOP -> viewModel.stopPlayback()
+            WIDGET_ACTION_LIKE -> viewModel.toggleLike()
+            WIDGET_ACTION_SHUFFLE -> viewModel.toggleShuffle()
+            WIDGET_ACTION_REPEAT -> viewModel.toggleRepeat()
         }
     }
 }
@@ -273,6 +279,10 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         override fun skip() = this@JellyMixViewModel.skip()
         override fun previous() = this@JellyMixViewModel.previous()
         override fun stopPlayback() = this@JellyMixViewModel.stopPlayback()
+        override fun like() = this@JellyMixViewModel.toggleLike()
+        override fun shuffle() = this@JellyMixViewModel.toggleShuffle()
+        override fun repeat() = this@JellyMixViewModel.toggleRepeat()
+        override fun seekTo(positionMs: Long) = this@JellyMixViewModel.seekToPositionMs(positionMs)
     }
 
     var state by mutableStateOf(
@@ -492,6 +502,15 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         playbackProgress = clamped
         refreshPlaybackNotification()
         persistPlaybackState()
+    }
+
+    fun seekToPositionMs(positionMs: Long) {
+        val durationMs = (state.currentTrack.durationSec * 1000L).coerceAtLeast(1L)
+        val clampedPositionMs = positionMs.coerceIn(0L, durationMs)
+        runCatching { player?.seekTo(clampedPositionMs) }
+        playbackProgress = progressForPosition(state.currentTrack, clampedPositionMs)
+        persistPlaybackPosition(positionMs = clampedPositionMs, force = true)
+        refreshPlaybackNotification()
     }
 
     fun connect() {
