@@ -34,16 +34,12 @@
             </intent-filter>
         </activity>
         <service
-            android:name=".CarPlaybackService"
+            android:name=".JellyMixMediaLibraryService"
             android:exported="true"
-            android:foregroundServiceType="mediaPlayback"
-            android:permission="android.permission.BIND_MEDIA_BROWSER_SERVICE">
+            android:foregroundServiceType="mediaPlayback">
             <intent-filter>
-                <action android:name="android.media.browse.MediaBrowserService" />
+                <action android:name="androidx.media3.session.MediaLibraryService" />
             </intent-filter>
-            <meta-data
-                android:name="androidx.car.app.media.CalMediaActivityComponent"
-                android:value="com.smithware.jellymix.CarMediaTrampolineActivity" />
         </service>
         <service
             android:name=".JellyMixCarAppService"

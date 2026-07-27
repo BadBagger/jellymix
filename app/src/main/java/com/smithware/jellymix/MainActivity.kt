@@ -1691,7 +1691,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     }
 }
 
-private class JellyfinClient {
+internal class JellyfinClient {
     fun publicSystemInfo(serverUrl: String): JellyfinServerInfo {
         val json = requestJson("$serverUrl/System/Info/Public", "GET", null, null)
         return JellyfinServerInfo(
@@ -4981,9 +4981,9 @@ data class DjMessage(val speaker: String, val text: String)
 @Immutable
 data class JellyfinPlaylist(val id: String, val name: String, val childCount: Int, val imageUrl: String?)
 
-private data class JellyfinSession(val token: String, val userId: String)
+internal data class JellyfinSession(val token: String, val userId: String)
 
-private data class JellyfinTrackFetch(val tracks: List<Track>, val rawTrackCount: Int)
+internal data class JellyfinTrackFetch(val tracks: List<Track>, val rawTrackCount: Int)
 
 private data class JellyfinLibraryLoad(val tracks: List<Track>, val playlists: List<JellyfinPlaylist>, val rawTrackCount: Int = tracks.sumOf { 1 + it.alternates.size })
 
