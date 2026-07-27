@@ -1270,6 +1270,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                                 player = this@apply
                                 if (playerToReplace !== this@apply) viewModelScope.launch { runCatching { playerToReplace?.release() } }
                                 recordPlayStart(track)
+                                updatePlaybackProgressFromPlayer(track.id)
                                 startPlaybackMonitor(track.id)
                                 state = state.copy(
                                     isPlaying = true,
@@ -1316,12 +1317,8 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         cancelPlaybackMonitor()
         playbackMonitorJob = viewModelScope.launch {
             while (state.isPlaying && state.currentTrack.id == trackId) {
-                val activePlayer = player
-                val durationMs = runCatching { activePlayer?.duration ?: 0 }.getOrDefault(0)
-                val positionMs = runCatching { activePlayer?.currentPosition ?: 0 }.getOrDefault(0)
+                val (positionMs, durationMs) = updatePlaybackProgressFromPlayer(trackId)
                 if (durationMs > 0 && positionMs >= 0) {
-                    val progress = (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
-                    if (state.currentTrack.id == trackId) playbackProgress = progress
                     val remainingMs = durationMs - positionMs
                     if (
                         remainingMs in 1..CrossfadeTriggerRemainingMs &&
@@ -1335,6 +1332,22 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 delay(500)
             }
         }
+    }
+
+    private fun updatePlaybackProgressFromPlayer(trackId: String): Pair<Long, Long> {
+        val activePlayer = player
+        val playerDurationMs = runCatching { activePlayer?.duration ?: C.TIME_UNSET }.getOrDefault(C.TIME_UNSET)
+        val fallbackDurationMs = (state.currentTrack.durationSec * 1000L).takeIf { it > 0 } ?: 0L
+        val durationMs = playerDurationMs
+            .takeIf { it > 0 && it != C.TIME_UNSET }
+            ?: fallbackDurationMs
+        val positionMs = runCatching { activePlayer?.currentPosition ?: 0L }
+            .getOrDefault(0L)
+            .coerceAtLeast(0L)
+        if (durationMs > 0 && state.currentTrack.id == trackId) {
+            playbackProgress = (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+        }
+        return positionMs to durationMs
     }
 
     private fun startCrossfadeToNext(fromTrackId: String) {
