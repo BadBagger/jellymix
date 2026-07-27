@@ -78,6 +78,7 @@ Done:
 - Now Playing hides the mini player while open, removes the low-value song-detail card, and uses larger driving-friendly transport controls: 60dp secondary buttons, a 76dp primary play/pause button, and clear active states for shuffle, like, and repeat.
 - Android home-screen widget is included. It reads the local current-track cache, shows title/artist/Jellyfin context, keeps the widget background as an app-open target, and routes play/pause plus skip taps to private foreground-service playback commands so button taps do not open `MainActivity`.
 - The Android home-screen widget now uses a cleaner music-card layout with generated per-track artwork fallback, Previous / Play-Pause / Next controls, larger 46-54dp tap targets, real media glyphs, and accessibility descriptions instead of the earlier launcher-icon and two-button rough layout.
+- Android widgets now have separate Bar, Compact, and Showcase styles in the widget picker. Widgets read cached Jellyfin track image URLs, render a generated fallback immediately, then fetch/cache the real album artwork asynchronously and update every JellyMix widget style without blocking the launcher.
 - Lock-screen/media notification controls are included. The app owns a playback `MediaSession`, posts a public media-style notification with Previous, Play/Pause, Skip, and Stop actions, requests Android 13+ notification permission when playback starts, and routes notification action buttons through foreground-safe private playback commands instead of opening `MainActivity`.
 - Swipe-down media controls now route exact `MediaSession.Callback` Play, Pause, Previous, Next, and Stop events to the active phone playback bridge first, with a foreground widget-service fallback when the activity controller is unavailable. The notification shade card is simplified to Previous / Play-Pause / Next, uses public media metadata/artwork fallback, keeps Stop as the dismiss action, and applies JellyMix teal accent styling so it reads like a clean music notification instead of a debug control panel.
 - The Jellyfin connection card is onboarding-style: it hides after the library actually loads and reappears only when there is no saved session or the saved session fails to load the library.
@@ -135,6 +136,7 @@ Published:
 - Widget polish release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.35-widget-polish`
 - Autoplay mix/playlist tap release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.36-autoplay-playlists`
 - Now Playing progress fix release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.37-progress-timestamps`
+- Widget styles/artwork release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.38-widget-styles-artwork`
 - Server reachability from the Windows workspace was confirmed for `http://www.badgerflix.win/System/Info/Public` and `https://www.badgerflix.win/System/Info/Public`; both returned BadgerFlix `10.11.11`. Phone-side library loading still needs verification.
 
 ## Immediate Next Blocker

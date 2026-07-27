@@ -52,6 +52,15 @@
             android:maxLines="1"
             android:textColor="#D4DBE6"
             android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/widgetAlbum"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="#99D4DBE6"
+            android:textSize="12sp" />
     </LinearLayout>
 
     <LinearLayout

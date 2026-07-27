@@ -1,6 +1,8 @@
 <resources>
     <string name="widget_artwork">JellyMix artwork</string>
     <string name="widget_description">JellyMix current music widget</string>
+    <string name="widget_compact_description">JellyMix compact music controls</string>
+    <string name="widget_showcase_description">JellyMix artwork music player</string>
     <string name="widget_previous">⏮</string>
     <string name="widget_play">&gt;</string>
     <string name="widget_pause">⏸</string>

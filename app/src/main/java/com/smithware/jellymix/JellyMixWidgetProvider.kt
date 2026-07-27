@@ -7,6 +7,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
@@ -15,24 +16,39 @@ import android.graphics.Rect
 import android.graphics.Shader
 import android.os.Build
 import android.widget.RemoteViews
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 
-class JellyMixWidgetProvider : AppWidgetProvider() {
+enum class JellyMixWidgetStyle(val layoutId: Int, val providerClass: Class<out AppWidgetProvider>) {
+    Bar(R.layout.widget_jellymix, JellyMixWidgetProvider::class.java),
+    Compact(R.layout.widget_jellymix_compact, JellyMixCompactWidgetProvider::class.java),
+    Showcase(R.layout.widget_jellymix_showcase, JellyMixShowcaseWidgetProvider::class.java)
+}
+
+open class JellyMixWidgetProvider(
+    private val widgetStyle: JellyMixWidgetStyle = JellyMixWidgetStyle.Bar
+) : AppWidgetProvider() {
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
         appWidgetIds.forEach { widgetId ->
-            appWidgetManager.updateAppWidget(widgetId, buildWidgetViews(context))
+            appWidgetManager.updateAppWidget(widgetId, buildWidgetViews(context, widgetStyle))
         }
+        refreshArtworkAsync(context.applicationContext, widgetStyle, appWidgetIds)
     }
 
     companion object {
         fun updateAll(context: Context) {
             val appWidgetManager = AppWidgetManager.getInstance(context)
-            val widgetIds = appWidgetManager.getAppWidgetIds(ComponentName(context, JellyMixWidgetProvider::class.java))
-            widgetIds.forEach { widgetId ->
-                appWidgetManager.updateAppWidget(widgetId, buildWidgetViews(context))
+            JellyMixWidgetStyle.entries.forEach { style ->
+                val widgetIds = appWidgetManager.getAppWidgetIds(ComponentName(context, style.providerClass))
+                widgetIds.forEach { widgetId ->
+                    appWidgetManager.updateAppWidget(widgetId, buildWidgetViews(context, style))
+                }
+                refreshArtworkAsync(context.applicationContext, style, widgetIds)
             }
         }
 
-        private fun buildWidgetViews(context: Context): RemoteViews {
+        private fun buildWidgetViews(context: Context, style: JellyMixWidgetStyle, artworkOverride: Bitmap? = null): RemoteViews {
             val prefs = context.getSharedPreferences("jellymix", Context.MODE_PRIVATE)
             val tracks = prefs.getString("cachedTracks", null)?.toTrackList().orEmpty().ifEmpty { sampleTracks }
             val currentId = prefs.getString("currentTrackId", null)
@@ -47,13 +63,16 @@ class JellyMixWidgetProvider : AppWidgetProvider() {
             val previousPendingIntent = pendingPlaybackService(context, 1, previousIntent)
             val playPendingIntent = pendingPlaybackService(context, 2, playIntent)
             val skipPendingIntent = pendingPlaybackService(context, 3, skipIntent)
+            val subtitle = listOf(current.artist, current.album).filter { it.isNotBlank() }.joinToString(" - ")
+            val artwork = artworkOverride ?: cachedArtwork(context, current) ?: widgetArtwork(current, style)
 
-            return RemoteViews(context.packageName, R.layout.widget_jellymix).apply {
+            return RemoteViews(context.packageName, style.layoutId).apply {
                 setTextViewText(R.id.widgetTitle, current.title)
-                setTextViewText(R.id.widgetArtist, current.artist)
-                setTextViewText(R.id.widgetContext, if (isConnected) "Jellyfin music" else "Tap to connect Jellyfin")
+                setTextViewText(R.id.widgetArtist, subtitle.ifBlank { current.artist.ifBlank { "JellyMix" } })
+                setTextViewText(R.id.widgetAlbum, current.album.ifBlank { "JellyMix" })
+                setTextViewText(R.id.widgetContext, if (isConnected) "Jellyfin music" else "Tap to connect")
                 setTextViewText(R.id.widgetPlayButton, if (isPlaying) "\u23F8" else "\u25B6")
-                setImageViewBitmap(R.id.widgetArtwork, widgetArtwork(current))
+                setImageViewBitmap(R.id.widgetArtwork, artwork)
                 setContentDescription(R.id.widgetPreviousButton, context.getString(R.string.widget_previous_description))
                 setContentDescription(R.id.widgetPlayButton, context.getString(R.string.widget_play_description))
                 setContentDescription(R.id.widgetSkipButton, context.getString(R.string.widget_next_description))
@@ -82,8 +101,57 @@ class JellyMixWidgetProvider : AppWidgetProvider() {
             }
         }
 
-        private fun widgetArtwork(track: Track): Bitmap {
-            val size = 192
+        private fun refreshArtworkAsync(context: Context, style: JellyMixWidgetStyle, widgetIds: IntArray) {
+            if (widgetIds.isEmpty()) return
+            val prefs = context.getSharedPreferences("jellymix", Context.MODE_PRIVATE)
+            val tracks = prefs.getString("cachedTracks", null)?.toTrackList().orEmpty().ifEmpty { sampleTracks }
+            val currentId = prefs.getString("currentTrackId", null)
+            val current = tracks.firstOrNull { it.id == currentId } ?: tracks.first()
+            if (current.imageUrl.isNullOrBlank() || cachedArtwork(context, current) != null) return
+            Thread {
+                val artwork = downloadArtwork(context, current) ?: return@Thread
+                val appWidgetManager = AppWidgetManager.getInstance(context)
+                widgetIds.forEach { widgetId ->
+                    appWidgetManager.updateAppWidget(widgetId, buildWidgetViews(context, style, artwork))
+                }
+            }.apply {
+                name = "JellyMixWidgetArtwork"
+                isDaemon = true
+                start()
+            }
+        }
+
+        private fun cachedArtwork(context: Context, track: Track): Bitmap? =
+            artworkFile(context, track)
+                .takeIf { it.exists() && it.length() > 0L }
+                ?.let { runCatching { BitmapFactory.decodeFile(it.absolutePath) }.getOrNull() }
+
+        private fun downloadArtwork(context: Context, track: Track): Bitmap? {
+            val imageUrl = track.imageUrl ?: return null
+            return runCatching {
+                val connection = (URL(imageUrl).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 4_000
+                    readTimeout = 6_000
+                    requestMethod = "GET"
+                }
+                connection.inputStream.use { stream ->
+                    BitmapFactory.decodeStream(stream)
+                }?.let { bitmap ->
+                    val scaled = Bitmap.createScaledBitmap(bitmap, 320, 320, true)
+                    artworkFile(context, track).also { file ->
+                        file.parentFile?.mkdirs()
+                        file.outputStream().use { out -> scaled.compress(Bitmap.CompressFormat.PNG, 92, out) }
+                    }
+                    scaled
+                }
+            }.getOrNull()
+        }
+
+        private fun artworkFile(context: Context, track: Track): File =
+            File(File(context.cacheDir, "widget-art"), "${track.id.hashCode()}-${track.imageUrl.hashCode()}.png")
+
+        private fun widgetArtwork(track: Track, style: JellyMixWidgetStyle): Bitmap {
+            val size = if (style == JellyMixWidgetStyle.Showcase) 320 else 192
             val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(bitmap)
             val seed = "${track.title}:${track.artist}:${track.album}".hashCode()
@@ -140,3 +208,7 @@ class JellyMixWidgetProvider : AppWidgetProvider() {
                 .ifBlank { "JM" }
     }
 }
+
+class JellyMixCompactWidgetProvider : JellyMixWidgetProvider(JellyMixWidgetStyle.Compact)
+
+class JellyMixShowcaseWidgetProvider : JellyMixWidgetProvider(JellyMixWidgetStyle.Showcase)

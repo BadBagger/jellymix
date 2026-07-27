@@ -83,6 +83,26 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/jellymix_widget_info" />
         </receiver>
+        <receiver
+            android:name=".JellyMixCompactWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/jellymix_widget_compact_info" />
+        </receiver>
+        <receiver
+            android:name=".JellyMixShowcaseWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/jellymix_widget_showcase_info" />
+        </receiver>
         <meta-data
             android:name="com.google.android.gms.car.application"
             android:resource="@xml/automotive_app_desc" />
