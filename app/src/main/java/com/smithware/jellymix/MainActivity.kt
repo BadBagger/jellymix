@@ -173,6 +173,7 @@ private const val JellyfinPageSize = 500
 private const val LibraryInitialVisibleTracks = 150
 private const val LibraryVisibleTrackIncrement = 150
 private const val LibraryDiscoverySourceLimit = 600
+private const val MixesRecommendationSourceLimit = 900
 
 class MainActivity : ComponentActivity() {
     private val viewModel: JellyMixViewModel by viewModels()
@@ -404,7 +405,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
 
     private fun promoteFullLibraryIfNeeded(targetTab: Tab = state.selectedTab) {
         val snapshot = fullLibrarySnapshot ?: return
-        if (targetTab == Tab.Home || state.tracks.size >= snapshot.tracks.size) return
+        if (targetTab == Tab.Home || targetTab == Tab.Mixes || state.tracks.size >= snapshot.tracks.size) return
         val byId = snapshot.tracks.associateBy { it.id }
         val promotedCurrent = byId[state.currentTrack.id] ?: state.currentTrack
         val promotedQueue = state.queue.map { byId[it.id] ?: it }
@@ -419,9 +420,6 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setMixesSegment(value: MixesSegment) {
-        if (value != MixesSegment.Mixes || state.selectedTab == Tab.Mixes) {
-            promoteFullLibraryIfNeeded(Tab.Mixes)
-        }
         state = state.copy(mixesSegment = value)
         prefs.edit().putString("mixesSegment", value.name).apply()
     }
@@ -1931,7 +1929,13 @@ private fun JellyMixApp(
                     )
                 }
                 .toList()
-            needsFullRanking -> deduplicateTracks(state.rankedTracks())
+            needsFullRanking -> rankedMixSourceTracks(
+                tracks = state.tracks,
+                liked = state.liked,
+                longListens = state.longListens,
+                skips = state.skips,
+                localPlays = state.localPlays
+            )
             else -> emptyList()
         }
     }
@@ -1984,7 +1988,20 @@ private fun JellyMixApp(
     val needsVibeMixes = state.selectedTab == Tab.Mixes && state.mixesSegment == MixesSegment.Vibes && !showNowPlaying
     val vibeMixes = remember(needsVibeMixes, state.tracks, state.vibeQuery, state.liked, state.longListens, state.localPlays, state.audioFeatures) {
         if (needsVibeMixes) {
-            buildVibeMixes(deduplicateTracks(state.tracks), state.vibeQuery, state.liked, state.longListens, state.localPlays, state.audioFeatures)
+            buildVibeMixes(
+                rankedMixSourceTracks(
+                    tracks = state.tracks,
+                    liked = state.liked,
+                    longListens = state.longListens,
+                    skips = state.skips,
+                    localPlays = state.localPlays
+                ),
+                state.vibeQuery,
+                state.liked,
+                state.longListens,
+                state.localPlays,
+                state.audioFeatures
+            )
         } else {
             emptyList()
         }
@@ -2600,6 +2617,41 @@ private fun SavedDiscoveryFilters(onSelected: (DiscoveryFilter) -> Unit) {
 private fun homeSpeedDialMixes(mixes: List<Mix>): List<Mix> =
     mixes.filter { it.name in setOf("Quick Shuffle", "Rediscover", "Liked Radio", "Loud Flow", "Library Radio", "Weekly Discovery") }
         .take(6)
+
+private fun rankedMixSourceTracks(
+    tracks: List<Track>,
+    liked: Map<String, Boolean>,
+    longListens: Map<String, Int>,
+    skips: Map<String, Int>,
+    localPlays: Map<String, Int>
+): List<Track> {
+    if (tracks.isEmpty()) return emptyList()
+    val source = LinkedHashMap<String, Track>(MixesRecommendationSourceLimit)
+    fun add(track: Track) {
+        if (source.size < MixesRecommendationSourceLimit) source.putIfAbsent(track.id, track)
+    }
+    tracks.take(420).forEach(::add)
+    tracks.asSequence()
+        .filter { liked.isLiked(it) || (localPlays[it.id] ?: 0) > 0 || (longListens[it.id] ?: 0) > 0 }
+        .take(260)
+        .forEach(::add)
+    val stride = (tracks.size / 220).coerceAtLeast(1)
+    tracks.asSequence()
+        .filterIndexed { index, _ -> index % stride == 0 }
+        .take(220)
+        .forEach(::add)
+    tracks.takeLast(160).forEach(::add)
+    return deduplicateTracks(source.values.toList())
+        .sortedByDescending { track ->
+            recommendationScore(
+                track = track,
+                liked = liked.isLiked(track),
+                longListens = longListens[track.id] ?: 0,
+                skips = skips[track.id] ?: 0,
+                localPlays = localPlays[track.id] ?: 0
+            )
+        }
+}
 
 @Composable
 private fun SpeedDialGrid(
