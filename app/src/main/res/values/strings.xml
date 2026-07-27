@@ -1,6 +1,11 @@
 <resources>
     <string name="widget_artwork">JellyMix artwork</string>
     <string name="widget_description">JellyMix current music widget</string>
+    <string name="widget_previous">⏮</string>
     <string name="widget_play">&gt;</string>
-    <string name="widget_skip">&gt;&gt;</string>
+    <string name="widget_pause">⏸</string>
+    <string name="widget_skip">⏭</string>
+    <string name="widget_previous_description">Previous track</string>
+    <string name="widget_play_description">Play or pause</string>
+    <string name="widget_next_description">Next track</string>
 </resources>
