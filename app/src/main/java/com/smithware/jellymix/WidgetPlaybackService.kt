@@ -31,6 +31,14 @@ class WidgetPlaybackService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         refreshState()
         startWidgetForeground()
+        if (intent?.action == WIDGET_ACTION_KEEP_ALIVE) {
+            return START_STICKY
+        }
+        if (intent?.action == WIDGET_ACTION_RELEASE_KEEP_ALIVE) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if (WidgetPlaybackBridge.dispatch(intent?.action)) {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
@@ -74,6 +82,7 @@ class WidgetPlaybackService : Service() {
     }
 
     private fun pauseFromExternalControl() {
+        persistCurrentPosition()
         player?.pause()
         persistPlaybackFlag(false)
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -109,6 +118,7 @@ class WidgetPlaybackService : Service() {
     }
 
     private fun stopPlayback() {
+        persistCurrentPosition()
         player?.stop()
         player?.release()
         player = null
@@ -145,7 +155,11 @@ class WidgetPlaybackService : Service() {
 
         player = MediaPlayer().apply {
             setDataSource(applicationContext, Uri.parse(jellyfinStreamUrl(serverUrl, track.id, token)))
-            setOnPreparedListener { it.start() }
+            setOnPreparedListener {
+                val resumePositionMs = savedPlaybackPositionMs(track)
+                if (resumePositionMs > 0L) runCatching { it.seekTo(resumePositionMs.toInt()) }
+                it.start()
+            }
             setOnCompletionListener { skip() }
             setOnErrorListener { _, _, _ ->
                 persistPlaybackFlag(false)
@@ -197,6 +211,11 @@ class WidgetPlaybackService : Service() {
         } else {
             localPlays
         }
+        val existingPositionMs = if (prefs.getString("playbackPositionTrackId", null) == track.id) {
+            savedPlaybackPositionMs(track)
+        } else {
+            0L
+        }
         prefs.edit()
             .putString("currentTrackId", track.id)
             .putString("queueIds", queue.joinToString(",") { it.id })
@@ -205,6 +224,8 @@ class WidgetPlaybackService : Service() {
             .putString("recentTrackIds", recent.take(30).joinToString(","))
             .putString("localPlays", nextLocalPlays.toStorageString())
             .putBoolean("isPlaying", isPlaying)
+            .putString("playbackPositionTrackId", track.id)
+            .putLong("playbackPositionMs", existingPositionMs)
             .apply()
         JellyMixWidgetProvider.updateAll(this)
     }
@@ -212,6 +233,24 @@ class WidgetPlaybackService : Service() {
     private fun persistPlaybackFlag(isPlaying: Boolean) {
         prefs.edit().putBoolean("isPlaying", isPlaying).apply()
         JellyMixWidgetProvider.updateAll(this)
+    }
+
+    private fun persistCurrentPosition() {
+        val track = queue.getOrNull(queueIndex) ?: currentSeed()
+        val positionMs = runCatching { player?.currentPosition?.toLong() ?: savedPlaybackPositionMs(track) }
+            .getOrDefault(savedPlaybackPositionMs(track))
+            .coerceAtLeast(0L)
+        prefs.edit()
+            .putString("playbackPositionTrackId", track.id)
+            .putLong("playbackPositionMs", positionMs)
+            .apply()
+    }
+
+    private fun savedPlaybackPositionMs(track: Track): Long {
+        if (prefs.getString("playbackPositionTrackId", null) != track.id) return 0L
+        val durationMs = (track.durationSec * 1000L).coerceAtLeast(1L)
+        return prefs.getLong("playbackPositionMs", 0L)
+            .coerceIn(0L, (durationMs - 1_500L).coerceAtLeast(0L))
     }
 
     private fun startWidgetForeground() {

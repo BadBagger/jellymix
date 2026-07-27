@@ -166,6 +166,8 @@ internal const val WIDGET_ACTION_PAUSE = "com.smithware.jellymix.widget.PAUSE"
 internal const val WIDGET_ACTION_SKIP = "com.smithware.jellymix.widget.SKIP"
 internal const val WIDGET_ACTION_PREVIOUS = "com.smithware.jellymix.widget.PREVIOUS"
 internal const val WIDGET_ACTION_STOP = "com.smithware.jellymix.widget.STOP"
+internal const val WIDGET_ACTION_KEEP_ALIVE = "com.smithware.jellymix.widget.KEEP_ALIVE"
+internal const val WIDGET_ACTION_RELEASE_KEEP_ALIVE = "com.smithware.jellymix.widget.RELEASE_KEEP_ALIVE"
 private const val DefaultJarvisPrompt = "Tell me what you want to hear. I can go deeper, keep it familiar, make it louder, chill it out, or build around an artist."
 private const val CrossfadeDurationMs = 2_800L
 private const val CrossfadeTriggerRemainingMs = 3_400L
@@ -240,6 +242,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     private val prefs = application.getSharedPreferences("jellymix", Application.MODE_PRIVATE)
     private val client = JellyfinClient()
     private var player: ExoPlayer? = null
+    private var activePlayerTrackId: String? = null
     private var pendingPlayer: ExoPlayer? = null
     private var preloadedPlayer: ExoPlayer? = null
     private var preloadedTrackId: String? = null
@@ -248,6 +251,8 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     private var playbackRequestToken = 0L
     private var playbackMonitorJob: Job? = null
     private var crossfadeJob: Job? = null
+    private var lastPersistedPlaybackPositionMs = 0L
+    private var lastPlaybackPositionPersistWallMs = 0L
     private var visualizer: Visualizer? = null
     private val visualizerAnalysis = VisualizerAnalysisEngine()
     val visualizerFrameBus = VisualizerFrameBus()
@@ -329,6 +334,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 val current = cached.tracks.firstOrNull { it.id == savedCurrentTrackId }
                     ?: savedQueue.firstOrNull()
                     ?: cached.tracks.first()
+                val savedPositionMs = savedPlaybackPositionMs(current)
                 val cachedTrackIds = cached.tracks.map { it.id }.toHashSet()
                 val stageForHome = state.selectedTab == Tab.Home
                 val startupTracks = if (stageForHome) compactStartupTracks(cached.tracks, current, savedQueue, state.recentTrackIds) else cached.tracks
@@ -348,7 +354,11 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                     libraryLoaded = true,
                     status = if (stageForHome) "Ready from saved library. Full library loads when needed." else "Ready from saved library. Refreshing Jellyfin..."
                 )
-                playbackProgress = current.completion.coerceIn(0f, 1f)
+                playbackProgress = if (savedPositionMs > 0L) {
+                    progressForPosition(current, savedPositionMs)
+                } else {
+                    current.completion.coerceIn(0f, 1f)
+                }
                 preloadCurrentTrack()
                 viewModelScope.launch {
                     delay(8_000)
@@ -466,7 +476,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun refreshPlaybackNotification() {
-        playbackNotificationController.update(state)
+        playbackNotificationController.update(state, currentPlaybackPositionMs())
     }
 
     fun seekToProgress(progress: Float) {
@@ -724,6 +734,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         val activePlayer = player
         if (activePlayer != null && runCatching { activePlayer.isPlaying }.getOrDefault(false)) {
             runCatching { activePlayer.pause() }
+            persistPlaybackPosition(force = true)
             cancelPlaybackMonitor()
             cancelCrossfade()
             releaseAudioVisualizer()
@@ -906,11 +917,13 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
 
     fun stopPlayback() {
         playbackRequestToken++
+        persistPlaybackPosition(force = true)
         cancelPlaybackMonitor()
         cancelCrossfade()
         releasePendingPlayer()
         runCatching { player?.release() }
         player = null
+        activePlayerTrackId = null
         releasePreloadedPlayer()
         releaseAudioVisualizer()
         state = state.copy(
@@ -1176,6 +1189,8 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 preloadedPlayer = null
                 preloadedTrackId = null
                 player = preparedPlayer
+                activePlayerTrackId = track.id
+                seekToSavedPositionIfCurrent(preparedPlayer, track)
                 preparedPlayer.play()
                 if (oldPlayer !== preparedPlayer) viewModelScope.launch { runCatching { oldPlayer?.release() } }
                 recordPlayStart(track)
@@ -1266,6 +1281,8 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                                 pendingPlayer = null
                                 releaseAudioVisualizer()
                                 player = this@apply
+                                activePlayerTrackId = track.id
+                                seekToSavedPositionIfCurrent(this@apply, track)
                                 if (playerToReplace !== this@apply) viewModelScope.launch { runCatching { playerToReplace?.release() } }
                                 recordPlayStart(track)
                                 updatePlaybackProgressFromPlayer(track.id)
@@ -1316,6 +1333,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         playbackMonitorJob = viewModelScope.launch {
             while (state.isPlaying && state.currentTrack.id == trackId) {
                 val (positionMs, durationMs) = updatePlaybackProgressFromPlayer(trackId)
+                persistPlaybackPosition(positionMs = positionMs, force = false)
                 if (durationMs > 0 && positionMs >= 0) {
                     val remainingMs = durationMs - positionMs
                     if (
@@ -1348,6 +1366,46 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         return positionMs to durationMs
     }
 
+    private fun currentPlaybackPositionMs(): Long {
+        val activePlayer = player
+        val activePosition = activePlayer?.takeIf { activePlayerTrackId == state.currentTrack.id }?.let { player ->
+            runCatching { player.currentPosition }.getOrNull()
+        }
+        return runCatching { activePosition ?: savedPlaybackPositionMs(state.currentTrack) }
+            .getOrDefault(savedPlaybackPositionMs(state.currentTrack))
+            .coerceAtLeast(0L)
+    }
+
+    private fun savedPlaybackPositionMs(track: Track): Long {
+        if (prefs.getString("playbackPositionTrackId", null) != track.id) return 0L
+        val durationMs = (track.durationSec * 1000L).coerceAtLeast(1L)
+        return prefs.getLong("playbackPositionMs", 0L)
+            .coerceIn(0L, (durationMs - 1_500L).coerceAtLeast(0L))
+    }
+
+    private fun progressForPosition(track: Track, positionMs: Long): Float {
+        val durationMs = (track.durationSec * 1000L).coerceAtLeast(1L)
+        return (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+    }
+
+    private fun seekToSavedPositionIfCurrent(targetPlayer: ExoPlayer, track: Track) {
+        val positionMs = savedPlaybackPositionMs(track)
+        if (positionMs <= 0L) return
+        runCatching { targetPlayer.seekTo(positionMs) }
+        playbackProgress = progressForPosition(track, positionMs)
+    }
+
+    private fun persistPlaybackPosition(positionMs: Long = currentPlaybackPositionMs(), force: Boolean) {
+        val now = System.currentTimeMillis()
+        if (!force && now - lastPlaybackPositionPersistWallMs < 2_000L && abs(positionMs - lastPersistedPlaybackPositionMs) < 1_500L) return
+        lastPlaybackPositionPersistWallMs = now
+        lastPersistedPlaybackPositionMs = positionMs
+        prefs.edit()
+            .putString("playbackPositionTrackId", state.currentTrack.id)
+            .putLong("playbackPositionMs", positionMs.coerceAtLeast(0L))
+            .apply()
+    }
+
     private fun startCrossfadeToNext(fromTrackId: String) {
         val oldPlayer = player ?: return
         if (!state.isPlaying || state.currentTrack.id != fromTrackId || crossfadeTrackId != null) return
@@ -1377,6 +1435,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                         crossfadePlayer = null
                         releaseAudioVisualizer()
                         player = nextPlayer
+                        activePlayerTrackId = nextTrack.id
                         nextPlayer.play()
                         recordPlayStart(nextTrack)
                         state = state.copy(
@@ -1628,6 +1687,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun persistPlaybackState() {
+        val positionMs = currentPlaybackPositionMs()
         prefs.edit()
             .putString("currentTrackId", state.currentTrack.id)
             .putString("queueIds", state.queue.joinToString(",") { it.id })
@@ -1635,9 +1695,33 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             .putString("queueTitle", state.queueTitle)
             .putString("djMode", state.djMode.name)
             .putBoolean("isPlaying", state.isPlaying)
+            .putString("playbackPositionTrackId", state.currentTrack.id)
+            .putLong("playbackPositionMs", positionMs)
             .apply()
+        lastPersistedPlaybackPositionMs = positionMs
+        lastPlaybackPositionPersistWallMs = System.currentTimeMillis()
         JellyMixWidgetProvider.updateAll(getApplication())
-        playbackNotificationController.update(state)
+        playbackNotificationController.update(state, positionMs)
+        if (state.isPlaying && state.hasSession && !state.currentTrack.id.startsWith("sample-")) {
+            keepPlaybackForegroundServiceAlive()
+        } else {
+            stopPlaybackForegroundService()
+        }
+    }
+
+    private fun keepPlaybackForegroundServiceAlive() {
+        val intent = Intent(appContext, WidgetPlaybackService::class.java).apply {
+            action = WIDGET_ACTION_KEEP_ALIVE
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            appContext.startForegroundService(intent)
+        } else {
+            appContext.startService(intent)
+        }
+    }
+
+    private fun stopPlaybackForegroundService() {
+        appContext.stopService(Intent(appContext, WidgetPlaybackService::class.java))
     }
 
     private fun persistCachedLibrary(tracks: List<Track>, playlists: List<JellyfinPlaylist>) {
@@ -1677,6 +1761,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     }
 
     override fun onCleared() {
+        persistPlaybackPosition(force = true)
         WidgetPlaybackBridge.unregister(widgetPlaybackController)
         cancelPlaybackMonitor()
         cancelCrossfade()
@@ -1684,6 +1769,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         releasePreloadedPlayer()
         runCatching { player?.release() }
         player = null
+        activePlayerTrackId = null
         playbackNotificationController.release()
         super.onCleared()
     }

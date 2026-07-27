@@ -39,11 +39,11 @@ class PlaybackNotificationController(private val context: Context) {
         isActive = true
     }
 
-    fun update(state: JellyMixState) {
+    fun update(state: JellyMixState, positionMs: Long = 0L) {
         if (!canPostNotifications()) return
         ensureChannel()
         session.isActive = true
-        updateSession(state)
+        updateSession(state, positionMs)
         notificationManager.notify(PLAYBACK_NOTIFICATION_ID, buildNotification(state))
     }
 
@@ -89,7 +89,7 @@ class PlaybackNotificationController(private val context: Context) {
             .build()
     }
 
-    private fun updateSession(state: JellyMixState) {
+    private fun updateSession(state: JellyMixState, positionMs: Long) {
         val track = state.currentTrack
         val artwork = notificationArtwork(track)
         session.setMetadata(
@@ -114,7 +114,7 @@ class PlaybackNotificationController(private val context: Context) {
                         PlaybackState.ACTION_SKIP_TO_NEXT or
                         PlaybackState.ACTION_STOP
                 )
-                .setState(playbackState, 0L, if (state.isPlaying) 1f else 0f)
+                .setState(playbackState, positionMs.coerceAtLeast(0L), if (state.isPlaying) 1f else 0f)
                 .build()
         )
     }
