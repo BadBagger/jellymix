@@ -12,6 +12,7 @@ import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
 import android.os.IBinder
+import java.io.File
 
 private const val WIDGET_PLAYBACK_CHANNEL_ID = "jellymix_widget_playback"
 private const val WIDGET_PLAYBACK_NOTIFICATION_ID = 1002
@@ -145,16 +146,15 @@ class WidgetPlaybackService : Service() {
         player?.release()
         player = null
 
-        val token = prefs.getString("token", "").orEmpty()
-        val serverUrl = prefs.getString("serverUrl", "").orEmpty()
-        if (token.isBlank() || serverUrl.isBlank() || track.id.startsWith("sample-")) {
+        val playbackUri = playbackUriForTrack(track)
+        if (playbackUri == null || track.id.startsWith("sample-")) {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return
         }
 
         player = MediaPlayer().apply {
-            setDataSource(applicationContext, Uri.parse(jellyfinStreamUrl(serverUrl, track.id, token)))
+            setDataSource(applicationContext, playbackUri)
             setOnPreparedListener {
                 val resumePositionMs = savedPlaybackPositionMs(track)
                 if (resumePositionMs > 0L) runCatching { it.seekTo(resumePositionMs.toInt()) }
@@ -252,6 +252,17 @@ class WidgetPlaybackService : Service() {
         return prefs.getLong("playbackPositionMs", 0L)
             .coerceIn(0L, (durationMs - 1_500L).coerceAtLeast(0L))
     }
+
+    private fun playbackUriForTrack(track: Track): Uri? {
+        offlineAudioFile(track).takeIf { it.exists() && it.length() > 0L }?.let { return Uri.fromFile(it) }
+        val token = prefs.getString("token", "").orEmpty()
+        val serverUrl = prefs.getString("serverUrl", "").orEmpty()
+        if (token.isBlank() || serverUrl.isBlank()) return null
+        return Uri.parse(jellyfinStreamUrl(serverUrl, track.id, token))
+    }
+
+    private fun offlineAudioFile(track: Track): File =
+        File(File(applicationContext.filesDir, "offline-audio"), "${track.id.safeOfflineFileName()}.audio")
 
     private fun startWidgetForeground() {
         ensureChannel()

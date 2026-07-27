@@ -19,6 +19,7 @@ import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.ListeningExecutorService
 import com.google.common.util.concurrent.MoreExecutors
 import java.security.MessageDigest
+import java.io.File
 import java.util.concurrent.Executors
 
 private const val MEDIA3_TAG = "JellyMixAutoMedia3"
@@ -317,18 +318,21 @@ class JellyMixMediaLibraryService : MediaLibraryService() {
     private fun prefs() = getSharedPreferences("jellymix", Context.MODE_PRIVATE)
 
     private fun Track.toPlayableMediaItem(): MediaItem {
-        val streamUri = if (isAuthenticated() && !id.startsWith("sample-")) {
-            client.streamUrl(
-                prefs().getString("serverUrl", "").orEmpty(),
-                id,
-                prefs().getString("token", "").orEmpty()
-            )
+        val playbackUri = offlineAudioFile(this).takeIf { it.exists() && it.length() > 0L }?.let(Uri::fromFile)
+            ?: if (isAuthenticated() && !id.startsWith("sample-")) {
+                Uri.parse(
+                    client.streamUrl(
+                        prefs().getString("serverUrl", "").orEmpty(),
+                        id,
+                        prefs().getString("token", "").orEmpty()
+                    )
+                )
         } else {
-            ""
+            Uri.EMPTY
         }
         return MediaItem.Builder()
             .setMediaId("$MEDIA_TRACK_PREFIX$id")
-            .setUri(streamUri)
+            .setUri(playbackUri)
             .setMediaMetadata(
                 MediaMetadata.Builder()
                     .setTitle(title)
@@ -341,6 +345,9 @@ class JellyMixMediaLibraryService : MediaLibraryService() {
             )
             .build()
     }
+
+    private fun offlineAudioFile(track: Track): File =
+        File(File(filesDir, "offline-audio"), "${track.id.safeOfflineFileName()}.audio")
 
     private fun List<Track>.toPlayableItems(): List<MediaItem> = map { it.toPlayableMediaItem() }
 

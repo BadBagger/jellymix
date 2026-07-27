@@ -140,6 +140,8 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import java.io.File
+import java.io.FileOutputStream
 import java.io.BufferedReader
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
@@ -304,6 +306,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 skips = prefs.getString("skips", null)?.toIntMap().orEmpty(),
                 longListens = prefs.getString("longListens", null)?.toIntMap().orEmpty(),
                 localPlays = prefs.getString("localPlays", null)?.toIntMap().orEmpty(),
+                offlineTrackIds = prefs.getString("offlineTrackIds", null)?.toIdSet().orEmpty(),
                 recentTrackIds = prefs.getString("recentTrackIds", null)?.split(",")?.filter { it.isNotBlank() }.orEmpty(),
                 libraryLoaded = false,
                 status = if (hasSavedSession) "Loading saved Jellyfin library..." else "Ready. Connect to Jellyfin or explore demo mixes."
@@ -350,6 +353,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                     skips = state.skips.filterKeys { it in cachedTrackIds },
                     longListens = state.longListens.filterKeys { it in cachedTrackIds },
                     localPlays = state.localPlays.filterKeys { it in cachedTrackIds },
+                    offlineTrackIds = pruneOfflineTrackIds(cachedTrackIds),
                     recentTrackIds = state.recentTrackIds.filter { it in cachedTrackIds },
                     libraryLoaded = true,
                     status = if (stageForHome) "Ready from saved library. Full library loads when needed." else "Ready from saved library. Refreshing Jellyfin..."
@@ -1007,6 +1011,64 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         persistPlaybackState()
     }
 
+    fun toggleOfflineDownload(track: Track) {
+        if (track.id.startsWith("sample-")) {
+            state = state.copy(status = "Demo tracks cannot be downloaded.")
+            return
+        }
+        if (state.offlineDownloadingIds.contains(track.id)) return
+        if (state.offlineTrackIds.contains(track.id) && offlineAudioFile(track).exists()) {
+            removeOfflineDownload(track)
+        } else {
+            downloadTrack(track)
+        }
+    }
+
+    private fun downloadTrack(track: Track) {
+        if (!state.hasSession) {
+            state = state.copy(status = "Connect to Jellyfin before downloading ${track.title}.")
+            return
+        }
+        state = state.copy(
+            offlineDownloadingIds = state.offlineDownloadingIds + track.id,
+            status = "Downloading ${track.title} for offline listening..."
+        )
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    downloadTrackToOfflineFile(track)
+                }
+            }.onSuccess {
+                val nextOfflineIds = state.offlineTrackIds + track.id
+                state = state.copy(
+                    offlineTrackIds = nextOfflineIds,
+                    offlineDownloadingIds = state.offlineDownloadingIds - track.id,
+                    status = "${track.title} is available offline."
+                )
+                persistOfflineTrackIds(nextOfflineIds)
+                JellyMixWidgetProvider.updateAll(getApplication())
+            }.onFailure { error ->
+                offlineAudioFile(track).delete()
+                state = state.copy(
+                    offlineDownloadingIds = state.offlineDownloadingIds - track.id,
+                    status = "Download failed for ${track.title}: ${error.cleanMessage()}"
+                )
+            }
+        }
+    }
+
+    private fun removeOfflineDownload(track: Track) {
+        offlineAudioFile(track).delete()
+        val nextOfflineIds = state.offlineTrackIds - track.id
+        state = state.copy(
+            offlineTrackIds = nextOfflineIds,
+            offlineDownloadingIds = state.offlineDownloadingIds - track.id,
+            status = "Removed offline copy of ${track.title}."
+        )
+        persistOfflineTrackIds(nextOfflineIds)
+        JellyMixWidgetProvider.updateAll(getApplication())
+    }
+
     fun clearSession() {
         playbackRequestToken++
         cancelPlaybackMonitor()
@@ -1026,6 +1088,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             .remove("queueTitle")
             .remove("djMode")
             .remove("isPlaying")
+            .remove("offlineTrackIds")
             .apply()
         playbackNotificationController.cancel()
         state = state.copy(
@@ -1045,6 +1108,8 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             jellyfinPlaylists = emptyList(),
             selectedPlaylist = null,
             selectedPlaylistTracks = emptyList(),
+            offlineTrackIds = emptySet(),
+            offlineDownloadingIds = emptySet(),
             libraryLoaded = false,
             isPlaying = false,
             visualizerBands = restingVisualizerBands(),
@@ -1164,7 +1229,8 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         val requestToken = ++playbackRequestToken
         cancelPlaybackMonitor()
         cancelCrossfade()
-        if (state.token.isBlank() || track.id.startsWith("sample-")) {
+        val playbackUri = playbackUriForTrack(track)
+        if (playbackUri == null || track.id.startsWith("sample-")) {
             releaseAudioVisualizer()
             releasePendingPlayer()
             releasePreloadedPlayer()
@@ -1179,7 +1245,6 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             persistPlaybackState()
             return
         }
-        val streamUrl = client.streamUrl(state.serverUrl, track.id, state.token)
         val preparedPlayer = preloadedPlayer
         if (preparedPlayer != null && preloadedTrackId == track.id) {
             runCatching {
@@ -1208,11 +1273,11 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                 runCatching { preparedPlayer.release() }
                 player = null
                 state = state.copy(status = "Preloaded playback failed: ${error.cleanMessage()}")
-                playCurrentTrackWithoutPreload(track, streamUrl, requestToken)
+                playCurrentTrackWithoutPreload(track, playbackUri, requestToken)
             }
             return
         }
-        playCurrentTrackWithoutPreload(track, streamUrl, requestToken)
+        playCurrentTrackWithoutPreload(track, playbackUri, requestToken)
     }
 
     private fun scheduleCurrentTrackLoad() {
@@ -1224,7 +1289,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    private fun playCurrentTrackWithoutPreload(track: Track, streamUrl: String, requestToken: Long) {
+    private fun playCurrentTrackWithoutPreload(track: Track, playbackUri: Uri, requestToken: Long) {
         state = state.copy(
             visualizerBands = syntheticVisualizerBands(track),
             audioFrame = visualizerAnalysis.ambient(track),
@@ -1236,7 +1301,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             releasePreloadedPlayer()
             pendingPlayer = buildStreamingPlayer(
                 track = track,
-                streamUrl = streamUrl,
+                playbackUri = playbackUri,
                 playWhenReady = true,
                 requestToken = requestToken,
                 playerToReplace = oldPlayer
@@ -1256,14 +1321,14 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
 
     private fun buildStreamingPlayer(
         track: Track,
-        streamUrl: String,
+        playbackUri: Uri,
         playWhenReady: Boolean,
         requestToken: Long,
         playerToReplace: ExoPlayer?
     ): ExoPlayer =
         ExoPlayer.Builder(appContext).build().apply {
             setAudioAttributes(musicAudioAttributes, true)
-            setMediaItem(MediaItem.fromUri(Uri.parse(streamUrl)))
+            setMediaItem(MediaItem.fromUri(playbackUri))
             this.playWhenReady = playWhenReady
             addListener(object : Player.Listener {
                 private var started = false
@@ -1412,13 +1477,13 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         val continuation = nextPlaybackContinuation()
         val nextTrack = continuation.track
         if (nextTrack.id == fromTrackId) return
-        val streamUrl = client.streamUrl(state.serverUrl, nextTrack.id, state.token)
+        val playbackUri = playbackUriForTrack(nextTrack) ?: return
         crossfadeTrackId = nextTrack.id
         runCatching {
             crossfadePlayer = ExoPlayer.Builder(appContext).build().apply {
                 setAudioAttributes(musicAudioAttributes, true)
                 volume = 0f
-                setMediaItem(MediaItem.fromUri(Uri.parse(streamUrl)))
+                setMediaItem(MediaItem.fromUri(playbackUri))
                 playWhenReady = false
                 addListener(object : Player.Listener {
                     override fun onPlaybackStateChanged(playbackState: Int) {
@@ -1532,12 +1597,12 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
 
     private fun preloadCurrentTrack() {
         val track = state.currentTrack
-        if (state.isPlaying || state.token.isBlank() || track.id.startsWith("sample-")) return
+        if (state.isPlaying || track.id.startsWith("sample-") || playbackUriForTrack(track) == null) return
         preloadTrack(track)
     }
 
     private fun preloadUpcomingTrack() {
-        if (!state.isPlaying || state.token.isBlank()) return
+        if (!state.isPlaying) return
         val queue = state.queue
         if (queue.size <= 1) return
         val nextIndex = state.queueIndex + 1
@@ -1555,12 +1620,12 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     private fun preloadTrack(track: Track) {
         if (preloadedTrackId == track.id && preloadedPlayer != null) return
         releasePreloadedPlayer()
-        val streamUrl = client.streamUrl(state.serverUrl, track.id, state.token)
+        val playbackUri = playbackUriForTrack(track) ?: return
         runCatching {
             preloadedTrackId = track.id
             preloadedPlayer = ExoPlayer.Builder(appContext).build().apply {
                 setAudioAttributes(musicAudioAttributes, true)
-                setMediaItem(MediaItem.fromUri(Uri.parse(streamUrl)))
+                setMediaItem(MediaItem.fromUri(playbackUri))
                 playWhenReady = false
                 addListener(object : Player.Listener {
                     override fun onPlaybackStateChanged(playbackState: Int) {
@@ -1722,6 +1787,59 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
 
     private fun stopPlaybackForegroundService() {
         appContext.stopService(Intent(appContext, WidgetPlaybackService::class.java))
+    }
+
+    private fun playbackUriForTrack(track: Track): Uri? {
+        offlineAudioFile(track).takeIf { it.exists() && it.length() > 0L }?.let { return Uri.fromFile(it) }
+        if (state.token.isBlank() || state.serverUrl.isBlank()) return null
+        return Uri.parse(client.streamUrl(state.serverUrl, track.id, state.token))
+    }
+
+    private fun offlineAudioFile(track: Track): File =
+        File(offlineAudioDirectory(), "${track.id.safeOfflineFileName()}.audio")
+
+    private fun offlineAudioDirectory(): File =
+        File(appContext.filesDir, "offline-audio").apply { mkdirs() }
+
+    private fun downloadTrackToOfflineFile(track: Track) {
+        val target = offlineAudioFile(track)
+        val temp = File(target.parentFile, "${target.name}.part")
+        target.parentFile?.mkdirs()
+        temp.delete()
+        val connection = URL(client.streamUrl(state.serverUrl, track.id, state.token)).openConnection() as HttpURLConnection
+        connection.connectTimeout = 15_000
+        connection.readTimeout = 60_000
+        try {
+            val responseCode = connection.responseCode
+            if (responseCode !in 200..299) error("server returned HTTP $responseCode")
+            connection.inputStream.use { input ->
+                FileOutputStream(temp).use { output ->
+                    input.copyTo(output)
+                }
+            }
+            if (temp.length() <= 0L) error("downloaded file was empty")
+            if (target.exists()) target.delete()
+            if (!temp.renameTo(target)) {
+                temp.copyTo(target, overwrite = true)
+                temp.delete()
+            }
+        } finally {
+            connection.disconnect()
+            if (temp.exists()) temp.delete()
+        }
+    }
+
+    private fun persistOfflineTrackIds(ids: Set<String>) {
+        prefs.edit().putString("offlineTrackIds", ids.joinToString(",")).apply()
+    }
+
+    private fun pruneOfflineTrackIds(validTrackIds: Set<String>): Set<String> {
+        val ids = prefs.getString("offlineTrackIds", null).toIdSet()
+        val existing = ids.filter { id ->
+            id in validTrackIds && File(offlineAudioDirectory(), "${id.safeOfflineFileName()}.audio").exists()
+        }.toSet()
+        if (existing != ids) persistOfflineTrackIds(existing)
+        return existing
     }
 
     private fun persistCachedLibrary(tracks: List<Track>, playlists: List<JellyfinPlaylist>) {
@@ -2197,6 +2315,7 @@ private fun JellyMixApp(
                             onShuffledQueueSelected = viewModel::startShuffledQueue,
                             onClearQueue = viewModel::clearQueue,
                             onOpenQueue = { showQueueSheet = true },
+                            onToggleOffline = viewModel::toggleOfflineDownload,
                             onTrackSelected = viewModel::selectTrack
                         )
                     }
@@ -2223,7 +2342,16 @@ private fun JellyMixApp(
                         item(contentType = "segment") { MixesSegmentControl(state.mixesSegment, viewModel::setMixesSegment) }
                         when (state.mixesSegment) {
                             MixesSegment.Mixes -> items(mixes, key = { it.name }, contentType = { "mix-card" }) { mix ->
-                                PlaylistCard(mix, state.liked, viewModel::startQueue, viewModel::startShuffledQueue, viewModel::selectTrack)
+                                PlaylistCard(
+                                    mix = mix,
+                                    liked = state.liked,
+                                    offlineTrackIds = state.offlineTrackIds,
+                                    offlineDownloadingIds = state.offlineDownloadingIds,
+                                    onQueueSelected = viewModel::startQueue,
+                                    onShuffledQueueSelected = viewModel::startShuffledQueue,
+                                    onTrackSelected = viewModel::selectTrack,
+                                    onToggleOffline = viewModel::toggleOfflineDownload
+                                )
                             }
                             MixesSegment.Vibes -> {
                                 item(contentType = "vibe-search") {
@@ -2238,9 +2366,12 @@ private fun JellyMixApp(
                                     VibeMixCard(
                                         mix = vibe,
                                         liked = state.liked,
+                                        offlineTrackIds = state.offlineTrackIds,
+                                        offlineDownloadingIds = state.offlineDownloadingIds,
                                         onQueueSelected = viewModel::startQueue,
                                         onShuffledQueueSelected = viewModel::startShuffledQueue,
-                                        onTrackSelected = viewModel::selectTrack
+                                        onTrackSelected = viewModel::selectTrack,
+                                        onToggleOffline = viewModel::toggleOfflineDownload
                                     )
                                 }
                             }
@@ -2256,8 +2387,11 @@ private fun JellyMixApp(
                                             playlist = playlist,
                                             tracks = state.selectedPlaylistTracks,
                                             liked = state.liked,
+                                            offlineTrackIds = state.offlineTrackIds,
+                                            offlineDownloadingIds = state.offlineDownloadingIds,
                                             onQueueSelected = { viewModel.startQueue(playlist.name, state.selectedPlaylistTracks) },
-                                            onTrackSelected = viewModel::selectTrack
+                                            onTrackSelected = viewModel::selectTrack,
+                                            onToggleOffline = viewModel::toggleOfflineDownload
                                         )
                                     }
                                 }
@@ -2293,6 +2427,8 @@ private fun JellyMixApp(
                             libraryBrowseContent(
                                 data = libraryBrowseData,
                                 liked = state.liked,
+                                offlineTrackIds = state.offlineTrackIds,
+                                offlineDownloadingIds = state.offlineDownloadingIds,
                                 totalTrackCount = libraryTracks.size,
                                 visibleTrackCount = visibleLibraryTracks.size,
                                 onShowMoreTracks = {
@@ -2300,15 +2436,19 @@ private fun JellyMixApp(
                                         .coerceAtMost(libraryTracks.size)
                                 },
                                 onTrackSelected = viewModel::selectTrack,
-                                onQueueSelected = viewModel::startQueue
+                                onQueueSelected = viewModel::startQueue,
+                                onToggleOffline = viewModel::toggleOfflineDownload
                             )
                             item(contentType = "chips") { SavedDiscoveryFilters(viewModel::setDiscoveryFilter) }
                             trackRowsSection(
                                 title = state.discoveryFilter.sectionTitle,
                                 tracks = discoveryTracks,
                                 liked = state.liked,
+                                offlineTrackIds = state.offlineTrackIds,
+                                offlineDownloadingIds = state.offlineDownloadingIds,
                                 keyPrefix = "discovery",
-                                onTrackSelected = viewModel::selectTrack
+                                onTrackSelected = viewModel::selectTrack,
+                                onToggleOffline = viewModel::toggleOfflineDownload
                             )
                         } else {
                             item(contentType = "empty") {
@@ -3478,9 +3618,12 @@ private fun VibeChipRow(query: String, onQueryChange: (String) -> Unit) {
 private fun VibeMixCard(
     mix: Mix,
     liked: Map<String, Boolean>,
+    offlineTrackIds: Set<String> = emptySet(),
+    offlineDownloadingIds: Set<String> = emptySet(),
     onQueueSelected: (String, List<Track>) -> Unit,
     onShuffledQueueSelected: (String, List<Track>) -> Unit,
-    onTrackSelected: (Track) -> Unit
+    onTrackSelected: (Track) -> Unit,
+    onToggleOffline: (Track) -> Unit = {}
 ) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -3494,7 +3637,15 @@ private fun VibeMixCard(
                     Text("Shuffle")
                 }
             }
-            mix.tracks.take(3).forEach { track -> QueueReasonRow(track, liked.isLiked(track)) { onTrackSelected(track) } }
+            mix.tracks.take(3).forEach { track ->
+                TrackRow(
+                    track = track,
+                    liked = liked.isLiked(track),
+                    offline = track.id in offlineTrackIds,
+                    downloading = track.id in offlineDownloadingIds,
+                    onToggleOffline = { onToggleOffline(track) }
+                ) { onTrackSelected(track) }
+            }
         }
     }
 }
@@ -3682,8 +3833,11 @@ private fun LazyListScope.trackRowsSection(
     title: String,
     tracks: List<Track>,
     liked: Map<String, Boolean>,
+    offlineTrackIds: Set<String> = emptySet(),
+    offlineDownloadingIds: Set<String> = emptySet(),
     keyPrefix: String,
-    onTrackSelected: (Track) -> Unit
+    onTrackSelected: (Track) -> Unit,
+    onToggleOffline: (Track) -> Unit = {}
 ) {
     item(key = "$keyPrefix-header", contentType = "section-header") { SectionHeader(title) }
     if (tracks.isEmpty()) {
@@ -3692,7 +3846,13 @@ private fun LazyListScope.trackRowsSection(
         }
     } else {
         items(tracks, key = { "$keyPrefix-${it.id}" }, contentType = { "track-row" }) { track ->
-            TrackRow(track, liked.isLiked(track)) { onTrackSelected(track) }
+            TrackRow(
+                track = track,
+                liked = liked.isLiked(track),
+                offline = track.id in offlineTrackIds,
+                downloading = track.id in offlineDownloadingIds,
+                onToggleOffline = { onToggleOffline(track) }
+            ) { onTrackSelected(track) }
         }
     }
 }
@@ -3742,15 +3902,27 @@ private fun buildLibraryBrowseData(mode: LibraryBrowseMode, tracks: List<Track>)
 private fun LazyListScope.libraryBrowseContent(
     data: LibraryBrowseData,
     liked: Map<String, Boolean>,
+    offlineTrackIds: Set<String> = emptySet(),
+    offlineDownloadingIds: Set<String> = emptySet(),
     totalTrackCount: Int,
     visibleTrackCount: Int,
     onShowMoreTracks: () -> Unit,
     onTrackSelected: (Track) -> Unit,
-    onQueueSelected: (String, List<Track>) -> Unit
+    onQueueSelected: (String, List<Track>) -> Unit,
+    onToggleOffline: (Track) -> Unit = {}
 ) {
     when (data.mode) {
         LibraryBrowseMode.Tracks -> {
-            trackRowsSection("Tracks", data.tracks, liked, keyPrefix = "library", onTrackSelected = onTrackSelected)
+            trackRowsSection(
+                "Tracks",
+                data.tracks,
+                liked,
+                offlineTrackIds = offlineTrackIds,
+                offlineDownloadingIds = offlineDownloadingIds,
+                keyPrefix = "library",
+                onTrackSelected = onTrackSelected,
+                onToggleOffline = onToggleOffline
+            )
             if (visibleTrackCount < totalTrackCount) {
                 item(key = "library-show-more", contentType = "show-more") {
                     ShowMoreTracksCard(
@@ -3768,8 +3940,11 @@ private fun LazyListScope.libraryBrowseContent(
                     subtitle = "${artistTracks.size} tracks",
                     tracks = artistTracks,
                     liked = liked,
+                    offlineTrackIds = offlineTrackIds,
+                    offlineDownloadingIds = offlineDownloadingIds,
                     onQueueSelected = { onQueueSelected(artist, artistTracks) },
-                    onTrackSelected = onTrackSelected
+                    onTrackSelected = onTrackSelected,
+                    onToggleOffline = onToggleOffline
                 )
             }
         }
@@ -3781,8 +3956,11 @@ private fun LazyListScope.libraryBrowseContent(
                     subtitle = listOf(artist, "${albumTracks.size} tracks").filter { it.isNotBlank() }.joinToString(" / "),
                     tracks = albumTracks,
                     liked = liked,
+                    offlineTrackIds = offlineTrackIds,
+                    offlineDownloadingIds = offlineDownloadingIds,
                     onQueueSelected = { onQueueSelected(album, albumTracks) },
-                    onTrackSelected = onTrackSelected
+                    onTrackSelected = onTrackSelected,
+                    onToggleOffline = onToggleOffline
                 )
             }
         }
@@ -3793,8 +3971,11 @@ private fun LazyListScope.libraryBrowseContent(
                     subtitle = "${genreTracks.size} tracks",
                     tracks = genreTracks,
                     liked = liked,
+                    offlineTrackIds = offlineTrackIds,
+                    offlineDownloadingIds = offlineDownloadingIds,
                     onQueueSelected = { onQueueSelected("$genre radio", genreTracks) },
-                    onTrackSelected = onTrackSelected
+                    onTrackSelected = onTrackSelected,
+                    onToggleOffline = onToggleOffline
                 )
             }
         }
@@ -3828,8 +4009,11 @@ private fun LibraryGroupCard(
     subtitle: String,
     tracks: List<Track>,
     liked: Map<String, Boolean>,
+    offlineTrackIds: Set<String> = emptySet(),
+    offlineDownloadingIds: Set<String> = emptySet(),
     onQueueSelected: () -> Unit,
-    onTrackSelected: (Track) -> Unit
+    onTrackSelected: (Track) -> Unit,
+    onToggleOffline: (Track) -> Unit = {}
 ) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -3841,7 +4025,13 @@ private fun LibraryGroupCard(
                 PrimaryPlayButton(onClick = onQueueSelected, enabled = tracks.isNotEmpty())
             }
             tracks.take(4).forEach { track ->
-                QueueReasonRow(track, liked.isLiked(track)) { onTrackSelected(track) }
+                TrackRow(
+                    track = track,
+                    liked = liked.isLiked(track),
+                    offline = track.id in offlineTrackIds,
+                    downloading = track.id in offlineDownloadingIds,
+                    onToggleOffline = { onToggleOffline(track) }
+                ) { onTrackSelected(track) }
             }
         }
     }
@@ -3858,7 +4048,14 @@ private fun EmptyState(title: String, detail: String) {
 }
 
 @Composable
-private fun TrackRow(track: Track, liked: Boolean, onClick: () -> Unit) {
+private fun TrackRow(
+    track: Track,
+    liked: Boolean,
+    offline: Boolean = false,
+    downloading: Boolean = false,
+    onToggleOffline: (() -> Unit)? = null,
+    onClick: () -> Unit
+) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -3873,6 +4070,24 @@ private fun TrackRow(track: Track, liked: Boolean, onClick: () -> Unit) {
                 Text(track.title, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 TrackSubtitleLine(track)
             }
+            onToggleOffline?.let { toggle ->
+                OutlinedButton(
+                    onClick = toggle,
+                    enabled = !downloading,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                    modifier = Modifier.height(40.dp)
+                ) {
+                    Text(
+                        when {
+                            downloading -> "Saving"
+                            offline -> "Saved"
+                            else -> "Save"
+                        },
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                }
+                Spacer(Modifier.width(6.dp))
+            }
             Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
                 HeartIcon(liked)
             }
@@ -3884,9 +4099,12 @@ private fun TrackRow(track: Track, liked: Boolean, onClick: () -> Unit) {
 private fun PlaylistCard(
     mix: Mix,
     liked: Map<String, Boolean>,
+    offlineTrackIds: Set<String> = emptySet(),
+    offlineDownloadingIds: Set<String> = emptySet(),
     onQueueSelected: (String, List<Track>) -> Unit,
     onShuffledQueueSelected: (String, List<Track>) -> Unit,
-    onTrackSelected: (Track) -> Unit
+    onTrackSelected: (Track) -> Unit,
+    onToggleOffline: (Track) -> Unit = {}
 ) {
     Card(
         modifier = Modifier.clickable { onQueueSelected(mix.name, mix.tracks) },
@@ -3902,7 +4120,15 @@ private fun PlaylistCard(
                     Text("Shuffle")
                 }
             }
-            mix.tracks.take(4).forEach { track -> TrackRow(track, liked.isLiked(track)) { onTrackSelected(track) } }
+            mix.tracks.take(4).forEach { track ->
+                TrackRow(
+                    track = track,
+                    liked = liked.isLiked(track),
+                    offline = track.id in offlineTrackIds,
+                    downloading = track.id in offlineDownloadingIds,
+                    onToggleOffline = { onToggleOffline(track) }
+                ) { onTrackSelected(track) }
+            }
         }
     }
 }
@@ -4220,8 +4446,11 @@ private fun SelectedPlaylistSection(
     playlist: JellyfinPlaylist,
     tracks: List<Track>,
     liked: Map<String, Boolean>,
+    offlineTrackIds: Set<String> = emptySet(),
+    offlineDownloadingIds: Set<String> = emptySet(),
     onQueueSelected: () -> Unit,
-    onTrackSelected: (Track) -> Unit
+    onTrackSelected: (Track) -> Unit,
+    onToggleOffline: (Track) -> Unit = {}
 ) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -4234,7 +4463,13 @@ private fun SelectedPlaylistSection(
                 Text("Play playlist queue")
             }
             tracks.take(12).forEach { track ->
-                TrackRow(track, liked.isLiked(track)) { onTrackSelected(track) }
+                TrackRow(
+                    track = track,
+                    liked = liked.isLiked(track),
+                    offline = track.id in offlineTrackIds,
+                    downloading = track.id in offlineDownloadingIds,
+                    onToggleOffline = { onToggleOffline(track) }
+                ) { onTrackSelected(track) }
             }
         }
     }
@@ -4315,6 +4550,7 @@ private fun NowPlayingPage(
     onShuffledQueueSelected: (String, List<Track>) -> Unit,
     onClearQueue: () -> Unit,
     onOpenQueue: () -> Unit,
+    onToggleOffline: (Track) -> Unit,
     onTrackSelected: (Track) -> Unit
 ) {
     val track = state.currentTrack
@@ -4401,6 +4637,19 @@ private fun NowPlayingPage(
                             onClick = { showOverflowMenu = true }
                         )
                         DropdownMenu(expanded = showOverflowMenu, onDismissRequest = { showOverflowMenu = false }) {
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        when {
+                                            track.id in state.offlineDownloadingIds -> "Saving offline..."
+                                            track.id in state.offlineTrackIds -> "Remove offline download"
+                                            else -> "Download for offline"
+                                        }
+                                    )
+                                },
+                                enabled = track.id !in state.offlineDownloadingIds,
+                                onClick = { showOverflowMenu = false; onToggleOffline(track) }
+                            )
                             DropdownMenuItem(text = { Text("Start song radio") }, onClick = { showOverflowMenu = false; onStartRadio() })
                             DropdownMenuItem(text = { Text("Go to album") }, onClick = { showOverflowMenu = false })
                             DropdownMenuItem(text = { Text("Go to artist") }, onClick = { showOverflowMenu = false })
@@ -4976,6 +5225,8 @@ data class JellyMixState(
     val skips: Map<String, Int>,
     val longListens: Map<String, Int>,
     val localPlays: Map<String, Int>,
+    val offlineTrackIds: Set<String> = emptySet(),
+    val offlineDownloadingIds: Set<String> = emptySet(),
     val recentTrackIds: List<String>,
     val rawTrackCount: Int = tracks.sumOf { 1 + it.alternates.size },
     val audioFeatures: Map<String, TrackAudioFeatures> = tracks.associate { it.id to inferAudioFeatures(it) },
@@ -6016,6 +6267,18 @@ internal fun String.toBooleanMap(): Map<String, Boolean> =
         val parts = it.split("=", limit = 2)
         if (parts.size == 2) parts[1].toBooleanStrictOrNull()?.let { value -> parts[0] to value } else null
     }.toMap()
+
+internal fun String?.toIdSet(): Set<String> =
+    this.orEmpty()
+        .split(",")
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+        .toSet()
+
+internal fun String.safeOfflineFileName(): String =
+    filter { it.isLetterOrDigit() || it == '-' || it == '_' }
+        .take(96)
+        .ifBlank { hashCode().absoluteValue.toString() }
 
 internal fun List<Track>.toTrackCacheString(): String {
     val items = JSONArray()
