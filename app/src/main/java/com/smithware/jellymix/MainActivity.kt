@@ -2168,6 +2168,11 @@ private fun JellyMixApp(
     } else {
         LibraryData()
     }
+    val discoverData = if (state.selectedTab == Tab.Discover && !showNowPlaying) {
+        viewModel.derivedDataCache.discover(state)
+    } else {
+        DiscoverData()
+    }
     val mixes = mixesData.mixes
     val vibeMixes = mixesData.vibeMixes
 
@@ -2252,7 +2257,6 @@ private fun JellyMixApp(
                             onRepeat = viewModel::toggleRepeat,
                             onStartRadio = viewModel::startRadioFromCurrent,
                             onVisualizerStageChanged = viewModel::setNowPlayingVisualizerStage,
-                            onDjModeSelected = viewModel::applyGuestDjMode,
                             onQueueSelected = viewModel::startQueue,
                             onShuffledQueueSelected = viewModel::startShuffledQueue,
                             onClearQueue = viewModel::clearQueue,
@@ -2342,16 +2346,21 @@ private fun JellyMixApp(
                         }
                     }
                     Tab.Discover -> {
-                        item(contentType = "jarvis") {
-                            JarvisDjCard(
-                                state = state,
-                                onDraftChange = viewModel::setDjDraft,
-                                onSendPrompt = { viewModel.sendDjPrompt() },
-                                onSuggestion = viewModel::sendDjPrompt,
-                                onModeSelected = viewModel::applyGuestDjMode
+                        item(contentType = "discover-summary") {
+                            DiscoverySummaryCard(discoverData.trendPlaylists)
+                        }
+                        items(discoverData.trendPlaylists, key = { it.name }, contentType = { "trend-playlist-card" }) { mix ->
+                            PlaylistCard(
+                                mix = mix,
+                                liked = state.liked,
+                                offlineTrackIds = state.offlineTrackIds,
+                                offlineDownloadingIds = state.offlineDownloadingIds,
+                                onQueueSelected = viewModel::startQueue,
+                                onShuffledQueueSelected = viewModel::startShuffledQueue,
+                                onTrackSelected = viewModel::selectTrack,
+                                onToggleOffline = viewModel::toggleOfflineDownload
                             )
                         }
-                        item(contentType = "jarvis-results") { JarvisResultsSection(state, viewModel::sendDjPrompt, viewModel::selectTrack) }
                     }
                     Tab.Library -> {
                         item(contentType = "search") {
@@ -3371,6 +3380,26 @@ private fun DiscoveryFilters(selected: DiscoveryFilter, onSelected: (DiscoveryFi
 }
 
 @Composable
+private fun DiscoverySummaryCard(playlists: List<Mix>) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Recommend, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Made from your listening", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "${playlists.size} custom playlists refreshed from likes, replays, long listens, skips, and recent history.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun JarvisDjCard(
     state: JellyMixState,
     onDraftChange: (String) -> Unit,
@@ -3619,6 +3648,34 @@ private fun GuestDjModeCard(selected: GuestDjMode, onModeSelected: (GuestDjMode)
 }
 
 @Composable
+private fun PersonalizedAutoplayCard(state: JellyMixState, onStartRadio: () -> Unit) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(Icons.Filled.Recommend, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text("Personalized autoplay", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(
+                    "Next picks follow your likes, replays, long listens, skips, and this song's lane.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            OutlinedButton(onClick = onStartRadio, enabled = state.tracks.isNotEmpty()) {
+                Text("Refresh")
+            }
+        }
+    }
+}
+
+@Composable
 private fun MixArtwork(mix: Mix) {
     val tracks = mix.tracks.take(4)
     val imageUrl = tracks.firstOrNull { !it.imageUrl.isNullOrBlank() }?.imageUrl
@@ -3818,6 +3875,11 @@ internal data class MixesData(
     val lastBuildMs: Long = 0L
 )
 
+internal data class DiscoverData(
+    val trendPlaylists: List<Mix> = emptyList(),
+    val lastBuildMs: Long = 0L
+)
+
 internal data class LibraryData(
     val tracks: List<Track> = emptyList(),
     val visibleTracks: List<Track> = emptyList(),
@@ -3831,6 +3893,8 @@ internal class JellyMixDerivedDataCache {
     private var homeData: HomeData = HomeData()
     private var mixesKey: Int = 0
     private var mixesData: MixesData = MixesData()
+    private var discoverKey: Int = 0
+    private var discoverData: DiscoverData = DiscoverData()
     private var libraryKey: Int = 0
     private var libraryData: LibraryData = LibraryData()
 
@@ -3933,6 +3997,38 @@ internal class JellyMixDerivedDataCache {
             )
         }
 
+    fun discover(state: JellyMixState): DiscoverData =
+        cached(
+            currentKey = discoverKey,
+            newKey = screenKey(
+                "discover",
+                state.tracks,
+                state.liked,
+                state.longListens,
+                state.skips,
+                state.localPlays,
+                state.recentTrackIds,
+                state.currentTrack.id,
+                state.audioFeatures
+            ),
+            current = discoverData,
+            assign = { key, data -> discoverKey = key; discoverData = data },
+            label = "discover"
+        ) {
+            DiscoverData(
+                trendPlaylists = buildTrendPlaylists(
+                    seed = state.currentTrack,
+                    tracks = state.tracks,
+                    liked = state.liked,
+                    longListens = state.longListens,
+                    skips = state.skips,
+                    localPlays = state.localPlays,
+                    recentlyPlayedIds = state.recentTrackIds,
+                    features = state.audioFeatures
+                )
+            )
+        }
+
     fun library(
         state: JellyMixState,
         query: String,
@@ -3997,6 +4093,7 @@ internal class JellyMixDerivedDataCache {
         val withTiming = when (built) {
             is HomeData -> built.copy(lastBuildMs = elapsed) as T
             is MixesData -> built.copy(lastBuildMs = elapsed) as T
+            is DiscoverData -> built.copy(lastBuildMs = elapsed) as T
             is LibraryData -> built.copy(lastBuildMs = elapsed) as T
             else -> built
         }
@@ -4714,7 +4811,6 @@ private fun NowPlayingPage(
     onRepeat: () -> Unit,
     onStartRadio: () -> Unit,
     onVisualizerStageChanged: (Boolean) -> Unit,
-    onDjModeSelected: (GuestDjMode) -> Unit,
     onQueueSelected: (String, List<Track>) -> Unit,
     onShuffledQueueSelected: (String, List<Track>) -> Unit,
     onClearQueue: () -> Unit,
@@ -4829,7 +4925,7 @@ private fun NowPlayingPage(
                 }
             }
         }
-        GuestDjModeCard(state.djMode, onDjModeSelected)
+        PersonalizedAutoplayCard(state = state, onStartRadio = onStartRadio)
         if (state.queue.isNotEmpty()) {
             QueueSummaryCard(state = state, onOpenQueue = onOpenQueue, onClearQueue = onClearQueue)
         }
@@ -6244,6 +6340,82 @@ internal fun buildJarvisDjQueue(
     } else {
         promptedQueue.artistDiverseTake(50)
     }
+}
+
+internal fun buildTrendPlaylists(
+    seed: Track,
+    tracks: List<Track>,
+    liked: Map<String, Boolean>,
+    longListens: Map<String, Int>,
+    skips: Map<String, Int>,
+    localPlays: Map<String, Int>,
+    recentlyPlayedIds: List<String>,
+    features: Map<String, TrackAudioFeatures> = tracks.associate { it.id to inferAudioFeatures(it) }
+): List<Mix> {
+    val library = deduplicateTracks(tracks)
+    if (library.isEmpty()) return emptyList()
+    val recentIds = recentlyPlayedIds.take(24).toSet()
+    fun ranked(limit: Int, scorer: (Track) -> Float): List<Track> =
+        library
+            .sortedByDescending { track -> scorer(track) + track.dailyJitter("trend:${seed.id}") * 0.01f }
+            .artistDiverseTake(limit)
+
+    val comfort = ranked(32) { track ->
+        recommendationScore(
+            track = track,
+            liked = liked.isLiked(track),
+            longListens = longListens[track.id] ?: 0,
+            skips = skips[track.id] ?: 0,
+            localPlays = localPlays[track.id] ?: 0
+        ) + if (track.id in recentIds) 8f else 0f
+    }
+    val fresh = ranked(36) { track ->
+        val localCount = localPlays[track.id] ?: 0
+        val skipCount = skips[track.id] ?: track.skipped
+        (if (track.id !in recentIds) 40f else -20f) +
+            (if (localCount == 0 && track.plays <= 3) 55f else 0f) +
+            track.completion * 35f -
+            skipCount * 14f
+    }
+    val deepCuts = ranked(32) { track ->
+        val localCount = localPlays[track.id] ?: 0
+        (30 - (track.plays + localCount).coerceAtMost(30)) * 3f +
+            track.completion * 42f +
+            (longListens[track.id] ?: 0) * 18f -
+            (skips[track.id] ?: track.skipped) * 12f
+    }
+    val flow = buildGuestDjQueue(
+        mode = GuestDjMode.Flow,
+        seed = seed,
+        tracks = library,
+        liked = liked,
+        longListens = longListens,
+        skips = skips,
+        localPlays = localPlays,
+        recentlyPlayedIds = recentlyPlayedIds
+    ).take(36)
+    val energy = ranked(32) { track ->
+        val feature = features.forTrack(track)
+        feature.rmsEnergy * 95f +
+            feature.dynamicRange * 35f +
+            feature.spectralCentroid * 24f +
+            track.completion * 18f -
+            (skips[track.id] ?: track.skipped) * 8f
+    }
+    val night = ranked(30) { track ->
+        val feature = features.forTrack(track)
+        vibeFitScore("late night", feature) * 100f +
+            (if (track.mood in setOf("Late", "Calm", "Warm")) 24f else 0f) +
+            recommendationScore(track, liked.isLiked(track), longListens[track.id] ?: 0, skips[track.id] ?: 0, localPlays[track.id] ?: 0) * 0.25f
+    }
+    return listOf(
+        Mix("Your Flow", "Follows what is playing and keeps the next songs close without repeating.", flow),
+        Mix("Fresh For You", "Lower-play songs with strong completion and low-skip signals.", fresh),
+        Mix("Deep Cuts", "Less obvious tracks that still match your listening habits.", deepCuts),
+        Mix("Comfort Zone", "Likes, replays, and long listens weighted toward familiar picks.", comfort),
+        Mix("Energy Lift", "Higher-energy tracks shaped by your replay and skip patterns.", energy),
+        Mix("After Hours", "Lower-pressure picks for late-night listening trends.", night)
+    ).filter { it.tracks.isNotEmpty() }
 }
 
 internal fun inferGuestDjMode(prompt: String, fallback: GuestDjMode): GuestDjMode {

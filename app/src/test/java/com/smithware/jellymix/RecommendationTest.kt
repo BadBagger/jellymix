@@ -800,6 +800,37 @@ class RecommendationTest {
         assertEquals("Mixed from your library", topArtistsLine(emptyList()))
     }
 
+    @Test
+    fun trendPlaylistsCreatePersonalizedDiscoveryWithoutPrompt() {
+        val tracks = (0 until 72).map { index ->
+            sampleTrack("trend-$index", liked = index % 8 == 0, plays = index % 12, completion = 0.45f + (index % 10) * 0.05f)
+                .copy(
+                    artist = "Artist ${index % 12}",
+                    album = "Album ${index % 18}",
+                    genre = listOf("Rock", "Indie", "Synth", "Ambient")[index % 4],
+                    mood = listOf("Drive", "Warm", "Late", "Calm")[index % 4],
+                    durationSec = 150 + index
+                )
+        }
+
+        val playlists = buildTrendPlaylists(
+            seed = tracks.first(),
+            tracks = tracks,
+            liked = tracks.associate { it.id to it.liked },
+            longListens = tracks.filterIndexed { index, _ -> index % 9 == 0 }.associate { it.id to 2 },
+            skips = mapOf("trend-4" to 3),
+            localPlays = tracks.associate { it.id to (it.plays % 5) },
+            recentlyPlayedIds = tracks.take(10).map { it.id }
+        )
+
+        assertEquals(
+            listOf("Your Flow", "Fresh For You", "Deep Cuts", "Comfort Zone", "Energy Lift", "After Hours"),
+            playlists.map { it.name }
+        )
+        assertTrue(playlists.all { it.tracks.isNotEmpty() })
+        assertTrue(playlists.flatMap { it.tracks.take(3) }.map { it.id }.toSet().size > 8)
+    }
+
     private fun sampleTrack(id: String, liked: Boolean, plays: Int, completion: Float): Track =
         Track(
             id = id,
