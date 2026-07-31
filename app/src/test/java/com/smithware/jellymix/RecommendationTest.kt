@@ -92,6 +92,32 @@ class RecommendationTest {
     }
 
     @Test
+    fun generatedMixesHaveDistinctOpenersWhenLibraryAllowsIt() {
+        val tracks = (0 until 96).map { index ->
+            sampleTrack("distinct-$index", liked = index % 5 == 0, plays = 30 - (index % 15), completion = 0.62f + (index % 7) * 0.04f)
+                .copy(
+                    artist = "Artist ${index % 16}",
+                    album = "Album ${index % 24}",
+                    genre = listOf("Rock", "Indie", "Synth", "Dance")[index % 4],
+                    mood = listOf("Warm", "Drive", "Late", "Bright")[index % 4],
+                    durationSec = 160 + index
+                )
+        }
+
+        val mixes = buildMixes(
+            rankedTracks = tracks,
+            liked = tracks.associate { it.id to it.liked },
+            longListens = tracks.filterIndexed { index, _ -> index % 9 == 0 }.associate { it.id to 2 },
+            skips = emptyMap(),
+            localPlays = tracks.associate { it.id to (it.plays % 4) },
+            daySeed = "2026-07-31"
+        )
+
+        val openerIds = mixes.mapNotNull { it.tracks.firstOrNull()?.id }
+        assertTrue(openerIds.toSet().size >= 6)
+    }
+
+    @Test
     fun filterTracksMatchesArtistAlbumGenreAndMood() {
         val tracks = listOf(
             sampleTrack("1", liked = true, plays = 10, completion = 0.9f),
@@ -732,6 +758,46 @@ class RecommendationTest {
         assertTrue(isQueueEnd(currentIndex = 2, queueSize = 3, repeatEnabled = false))
         assertEquals(false, isQueueEnd(currentIndex = 1, queueSize = 3, repeatEnabled = false))
         assertEquals(false, isQueueEnd(currentIndex = 2, queueSize = 3, repeatEnabled = true))
+    }
+
+    @Test
+    fun derivedDataCacheReusesHomeDataForPlaybackOnlyChanges() {
+        val tracks = (0 until 40).map { index ->
+            sampleTrack("cache-$index", liked = index % 7 == 0, plays = index % 5, completion = 0.7f)
+                .copy(artist = "Artist ${index % 8}", album = "Album ${index % 12}")
+        }
+        val state = JellyMixState(
+            serverUrl = "https://music.example",
+            username = "user",
+            tracks = tracks,
+            currentTrack = tracks.first(),
+            jellyfinPlaylists = emptyList(),
+            selectedPlaylistTracks = emptyList(),
+            liked = tracks.associate { it.id to it.liked },
+            skips = emptyMap(),
+            longListens = emptyMap(),
+            localPlays = emptyMap(),
+            recentTrackIds = tracks.take(8).map { it.id }
+        )
+        val cache = JellyMixDerivedDataCache()
+
+        val first = cache.home(state)
+        val second = cache.home(state.copy(isPlaying = true, status = "Playing"))
+
+        assertTrue(first === second)
+    }
+
+    @Test
+    fun topArtistsLineSummarizesActualPlaylistSpread() {
+        val tracks = listOf(
+            sampleTrack("a", liked = false, plays = 1, completion = 0.7f).copy(artist = "Gold Panda"),
+            sampleTrack("b", liked = false, plays = 1, completion = 0.7f).copy(artist = "Gold Panda"),
+            sampleTrack("c", liked = false, plays = 1, completion = 0.7f).copy(artist = "Linkin Park"),
+            sampleTrack("d", liked = false, plays = 1, completion = 0.7f).copy(artist = "The Cure")
+        )
+
+        assertEquals("Gold Panda • Linkin Park • The Cure", topArtistsLine(tracks))
+        assertEquals("Mixed from your library", topArtistsLine(emptyList()))
     }
 
     private fun sampleTrack(id: String, liked: Boolean, plays: Int, completion: Float): Track =

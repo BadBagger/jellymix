@@ -7,6 +7,7 @@ import android.media.audiofx.Visualizer
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.content.pm.PackageManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -268,6 +269,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
     private var fullLibrarySnapshot: JellyfinLibraryLoad? = null
     private val appContext = application.applicationContext
     private val playbackNotificationController = PlaybackNotificationController(appContext)
+    internal val derivedDataCache = JellyMixDerivedDataCache()
     private val musicAudioAttributes = AudioAttributes.Builder()
         .setUsage(C.USAGE_MEDIA)
         .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
@@ -2128,125 +2130,46 @@ private fun JellyMixApp(
     var showMiniPlayer by remember { mutableStateOf(true) }
     var libraryVisibleTrackLimit by remember { mutableIntStateOf(LibraryInitialVisibleTracks) }
     val state = viewModel.state
+    var searchDraft by remember { mutableStateOf(state.searchQuery) }
+    var vibeDraft by remember { mutableStateOf(state.vibeQuery) }
     LaunchedEffect(state.currentTrack.id) {
         showMiniPlayer = true
     }
-    LaunchedEffect(state.selectedTab, state.libraryBrowseMode, state.searchQuery) {
+    LaunchedEffect(state.selectedTab, state.libraryBrowseMode, searchDraft) {
         libraryVisibleTrackLimit = LibraryInitialVisibleTracks
     }
-    val homeOnly = state.selectedTab == Tab.Home && !showNowPlaying
-    val needsFullMixes = state.selectedTab == Tab.Mixes && !showNowPlaying
-    val needsFullRanking = needsFullMixes
-    val rankedTracks = remember(homeOnly, needsFullRanking, state.tracks, state.liked, state.longListens, state.skips, state.localPlays) {
-        when {
-            homeOnly -> state.tracks
-                .asSequence()
-                .take(240)
-                .sortedByDescending { track ->
-                    recommendationScore(
-                        track = track,
-                        liked = state.liked.isLiked(track),
-                        longListens = state.longListens[track.id] ?: 0,
-                        skips = state.skips[track.id] ?: 0,
-                        localPlays = state.localPlays[track.id] ?: 0
-                    )
-                }
-                .toList()
-            needsFullRanking -> rankedMixSourceTracks(
-                tracks = state.tracks,
-                liked = state.liked,
-                longListens = state.longListens,
-                skips = state.skips,
-                localPlays = state.localPlays
-            )
-            else -> emptyList()
+    LaunchedEffect(searchDraft) {
+        delay(250)
+        if (searchDraft != viewModel.state.searchQuery) {
+            viewModel.setSearchQuery(searchDraft)
         }
+    }
+    LaunchedEffect(vibeDraft) {
+        delay(250)
+        if (vibeDraft != viewModel.state.vibeQuery) {
+            viewModel.setVibeQuery(vibeDraft)
+        }
+    }
+    LaunchedEffect(state.searchQuery) {
+        if (state.searchQuery != searchDraft) searchDraft = state.searchQuery
+    }
+    LaunchedEffect(state.vibeQuery) {
+        if (state.vibeQuery != vibeDraft) vibeDraft = state.vibeQuery
     }
     val canShowLibraryTracks = state.isConnected && state.tracks.none { it.id.startsWith("sample-") }
-    val libraryTracks = remember(state.selectedTab, showNowPlaying, canShowLibraryTracks, state.tracks, state.searchQuery) {
-        if (state.selectedTab == Tab.Library && !showNowPlaying && canShowLibraryTracks) {
-            if (state.searchQuery.isBlank()) state.tracks else filterTracks(state.tracks, state.searchQuery)
-        } else {
-            emptyList()
-        }
+    val homeData = viewModel.derivedDataCache.home(state)
+    val mixesData = if (state.selectedTab == Tab.Mixes && !showNowPlaying) {
+        viewModel.derivedDataCache.mixes(state, state.mixesSegment, vibeDraft)
+    } else {
+        MixesData()
     }
-    val visibleLibraryTracks = remember(libraryTracks, libraryVisibleTrackLimit) {
-        libraryTracks.take(libraryVisibleTrackLimit)
+    val libraryData = if (state.selectedTab == Tab.Library && !showNowPlaying) {
+        viewModel.derivedDataCache.library(state, searchDraft, libraryVisibleTrackLimit, canShowLibraryTracks)
+    } else {
+        LibraryData()
     }
-    val libraryBrowseData = remember(state.libraryBrowseMode, libraryTracks, visibleLibraryTracks) {
-        buildLibraryBrowseData(
-            mode = state.libraryBrowseMode,
-            tracks = if (state.libraryBrowseMode == LibraryBrowseMode.Tracks) visibleLibraryTracks else libraryTracks
-        )
-    }
-    val needsDiscoveryTracks = state.selectedTab == Tab.Library && !showNowPlaying
-    val discoveryTracks = remember(
-        needsDiscoveryTracks,
-        libraryTracks,
-        state.discoveryFilter,
-        state.liked,
-        state.skips,
-        state.longListens,
-        state.currentTrack.id
-    ) {
-        if (needsDiscoveryTracks) {
-            discoveryTracks(
-                tracks = libraryTracks.take(LibraryDiscoverySourceLimit),
-                filter = state.discoveryFilter,
-                liked = state.liked,
-                skips = state.skips,
-                longListens = state.longListens,
-                currentTrack = state.currentTrack
-            ).take(LibraryInitialVisibleTracks)
-        } else {
-            emptyList()
-        }
-    }
-    val recentTracks = remember(needsFullMixes, state.recentTrackIds, state.tracks) {
-        if (needsFullMixes) state.recentTracks() else emptyList()
-    }
-    val recentTrackPlays = remember(homeOnly, state.recentTrackIds, state.tracks) {
-        if (homeOnly) state.recentTrackPlays() else emptyList()
-    }
-    val needsVibeMixes = state.selectedTab == Tab.Mixes && state.mixesSegment == MixesSegment.Vibes && !showNowPlaying
-    val vibeMixes = remember(needsVibeMixes, state.tracks, state.vibeQuery, state.liked, state.longListens, state.localPlays, state.audioFeatures) {
-        if (needsVibeMixes) {
-            buildVibeMixes(
-                rankedMixSourceTracks(
-                    tracks = state.tracks,
-                    liked = state.liked,
-                    longListens = state.longListens,
-                    skips = state.skips,
-                    localPlays = state.localPlays
-                ),
-                state.vibeQuery,
-                state.liked,
-                state.longListens,
-                state.localPlays,
-                state.audioFeatures
-            )
-        } else {
-            emptyList()
-        }
-    }
-    val mixes = remember(needsFullMixes, rankedTracks, state.liked, state.longListens, state.skips, state.localPlays, recentTracks, state.audioFeatures) {
-        if (needsFullMixes) {
-            buildMixes(
-                rankedTracks,
-                state.liked,
-                state.longListens,
-                state.skips,
-                state.localPlays,
-                recentTracks,
-                state.audioFeatures
-            )
-        } else {
-            buildHomeSpeedDialMixesFast(rankedTracks, state.liked, state.longListens, state.skips, state.localPlays, state.audioFeatures)
-        }
-    }
-    val homeSpeedDial = remember(mixes) { homeSpeedDialMixes(mixes) }
-    val homeRecentPlays = remember(recentTrackPlays) { recentTrackPlays.take(10) }
-    val homeHeavyRotation = remember(rankedTracks) { rankedTracks.take(10) }
+    val mixes = mixesData.mixes
+    val vibeMixes = mixesData.vibeMixes
 
     Scaffold(
         bottomBar = {
@@ -2351,11 +2274,11 @@ private fun JellyMixApp(
                                 onStartRadio = viewModel::startRadioFromCurrent
                             )
                         }
-                        item(contentType = "speed-dial") { SpeedDialGrid(homeSpeedDial, viewModel::startQueue) }
-                        if (homeRecentPlays.isNotEmpty()) {
-                            item(contentType = "track-rail") { RecentTrackRail("Recently played", homeRecentPlays, viewModel::selectTrack) }
+                        item(contentType = "speed-dial") { SpeedDialGrid(homeData.speedDial, viewModel::startQueue) }
+                        if (homeData.recentPlays.isNotEmpty()) {
+                            item(contentType = "track-rail") { RecentTrackRail("Recently played", homeData.recentPlays, viewModel::selectTrack) }
                         }
-                        item(contentType = "track-rail") { TrackRail("Heavy rotation", homeHeavyRotation, viewModel::selectTrack) }
+                        item(contentType = "track-rail") { TrackRail("Heavy rotation", homeData.heavyRotation, viewModel::selectTrack) }
                     }
                     Tab.Mixes -> {
                         item(contentType = "segment") { MixesSegmentControl(state.mixesSegment, viewModel::setMixesSegment) }
@@ -2375,12 +2298,12 @@ private fun JellyMixApp(
                             MixesSegment.Vibes -> {
                                 item(contentType = "vibe-search") {
                                     VibeSearchCard(
-                                        query = state.vibeQuery,
-                                        onQueryChange = viewModel::setVibeQuery,
+                                        query = vibeDraft,
+                                        onQueryChange = { vibeDraft = it },
                                         resultCount = vibeMixes.size
                                     )
                                 }
-                                item(contentType = "chips") { VibeChipRow(state.vibeQuery, viewModel::setVibeQuery) }
+                                item(contentType = "chips") { VibeChipRow(vibeDraft) { vibeDraft = it } }
                                 items(vibeMixes, key = { it.name }, contentType = { "vibe-card" }) { vibe ->
                                     VibeMixCard(
                                         mix = vibe,
@@ -2433,26 +2356,26 @@ private fun JellyMixApp(
                     Tab.Library -> {
                         item(contentType = "search") {
                             SearchCard(
-                                query = state.searchQuery,
-                                onQueryChange = viewModel::setSearchQuery,
-                                matchCount = libraryTracks.size,
+                                query = searchDraft,
+                                onQueryChange = { searchDraft = it },
+                                matchCount = libraryData.tracks.size,
                                 libraryReady = canShowLibraryTracks
                             )
                         }
                         item(contentType = "segment") { LibraryBrowseSegmentControl(state.libraryBrowseMode, viewModel::setLibraryBrowseMode) }
                         if (canShowLibraryTracks) {
-                            item(contentType = "library-summary") { LibrarySummary(libraryTracks, state.rawTrackCount) }
-                            item(contentType = "library-actions") { LibraryActions(libraryTracks, state.libraryBrowseMode, viewModel::startQueue, viewModel::startShuffledQueue) }
+                            item(contentType = "library-summary") { LibrarySummary(libraryData.tracks, state.rawTrackCount) }
+                            item(contentType = "library-actions") { LibraryActions(libraryData.tracks, state.libraryBrowseMode, viewModel::startQueue, viewModel::startShuffledQueue) }
                             libraryBrowseContent(
-                                data = libraryBrowseData,
+                                data = libraryData.browseData,
                                 liked = state.liked,
                                 offlineTrackIds = state.offlineTrackIds,
                                 offlineDownloadingIds = state.offlineDownloadingIds,
-                                totalTrackCount = libraryTracks.size,
-                                visibleTrackCount = visibleLibraryTracks.size,
+                                totalTrackCount = libraryData.tracks.size,
+                                visibleTrackCount = libraryData.visibleTracks.size,
                                 onShowMoreTracks = {
                                     libraryVisibleTrackLimit = (libraryVisibleTrackLimit + LibraryVisibleTrackIncrement)
-                                        .coerceAtMost(libraryTracks.size)
+                                        .coerceAtMost(libraryData.tracks.size)
                                 },
                                 onTrackSelected = viewModel::selectTrack,
                                 onQueueSelected = viewModel::startQueue,
@@ -2461,7 +2384,7 @@ private fun JellyMixApp(
                             item(contentType = "chips") { SavedDiscoveryFilters(viewModel::setDiscoveryFilter) }
                             trackRowsSection(
                                 title = state.discoveryFilter.sectionTitle,
-                                tracks = discoveryTracks,
+                                tracks = libraryData.discoveryTracks,
                                 liked = state.liked,
                                 offlineTrackIds = state.offlineTrackIds,
                                 offlineDownloadingIds = state.offlineDownloadingIds,
@@ -3645,10 +3568,16 @@ private fun VibeMixCard(
     onToggleOffline: (Track) -> Unit = {}
 ) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            MixArtwork(mix)
-            Text(mix.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-            Text(mix.reason, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                MixArtwork(mix)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(mix.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text("${mix.tracks.size} tracks", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                    Text(topArtistsLine(mix.tracks), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            Text(mix.reason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
             mix.note?.let { InfoNote(it) }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                 PrimaryPlayButton(onClick = { onQueueSelected(mix.name, mix.tracks) }, enabled = mix.tracks.isNotEmpty(), modifier = Modifier.weight(1f))
@@ -3656,7 +3585,7 @@ private fun VibeMixCard(
                     Text("Shuffle")
                 }
             }
-            mix.tracks.take(3).forEach { track ->
+            mix.tracks.take(2).forEach { track ->
                 TrackRow(
                     track = track,
                     liked = liked.isLiked(track),
@@ -3876,7 +3805,221 @@ private fun LazyListScope.trackRowsSection(
     }
 }
 
-private data class LibraryBrowseData(
+internal data class HomeData(
+    val speedDial: List<Mix> = emptyList(),
+    val recentPlays: List<RecentTrackPlay> = emptyList(),
+    val heavyRotation: List<Track> = emptyList(),
+    val lastBuildMs: Long = 0L
+)
+
+internal data class MixesData(
+    val mixes: List<Mix> = emptyList(),
+    val vibeMixes: List<Mix> = emptyList(),
+    val lastBuildMs: Long = 0L
+)
+
+internal data class LibraryData(
+    val tracks: List<Track> = emptyList(),
+    val visibleTracks: List<Track> = emptyList(),
+    val browseData: LibraryBrowseData = LibraryBrowseData(LibraryBrowseMode.Tracks),
+    val discoveryTracks: List<Track> = emptyList(),
+    val lastBuildMs: Long = 0L
+)
+
+internal class JellyMixDerivedDataCache {
+    private var homeKey: Int = 0
+    private var homeData: HomeData = HomeData()
+    private var mixesKey: Int = 0
+    private var mixesData: MixesData = MixesData()
+    private var libraryKey: Int = 0
+    private var libraryData: LibraryData = LibraryData()
+
+    fun home(state: JellyMixState): HomeData =
+        cached(
+            currentKey = homeKey,
+            newKey = screenKey(
+                "home",
+                state.tracks,
+                state.liked,
+                state.longListens,
+                state.skips,
+                state.localPlays,
+                state.recentTrackIds,
+                state.audioFeatures
+            ),
+            current = homeData,
+            assign = { key, data -> homeKey = key; homeData = data },
+            label = "home"
+        ) {
+            val rankedTracks = state.tracks
+                .asSequence()
+                .take(240)
+                .sortedByDescending { track ->
+                    recommendationScore(
+                        track = track,
+                        liked = state.liked.isLiked(track),
+                        longListens = state.longListens[track.id] ?: 0,
+                        skips = state.skips[track.id] ?: 0,
+                        localPlays = state.localPlays[track.id] ?: 0
+                    )
+                }
+                .toList()
+            val speedDial = homeSpeedDialMixes(
+                buildHomeSpeedDialMixesFast(
+                    rankedTracks,
+                    state.liked,
+                    state.longListens,
+                    state.skips,
+                    state.localPlays,
+                    state.audioFeatures
+                )
+            )
+            HomeData(
+                speedDial = speedDial,
+                recentPlays = state.recentTrackPlays().take(10),
+                heavyRotation = rankedTracks.take(10)
+            )
+        }
+
+    fun mixes(state: JellyMixState, segment: MixesSegment, vibeQuery: String): MixesData =
+        cached(
+            currentKey = mixesKey,
+            newKey = screenKey(
+                "mixes",
+                state.tracks,
+                state.liked,
+                state.longListens,
+                state.skips,
+                state.localPlays,
+                state.recentTrackIds,
+                state.audioFeatures,
+                segment,
+                vibeQuery
+            ),
+            current = mixesData,
+            assign = { key, data -> mixesKey = key; mixesData = data },
+            label = "mixes"
+        ) {
+            val source = rankedMixSourceTracks(
+                tracks = state.tracks,
+                liked = state.liked,
+                longListens = state.longListens,
+                skips = state.skips,
+                localPlays = state.localPlays
+            )
+            val recentTracks = state.recentTracks()
+            MixesData(
+                mixes = buildMixes(
+                    source,
+                    state.liked,
+                    state.longListens,
+                    state.skips,
+                    state.localPlays,
+                    recentTracks,
+                    state.audioFeatures
+                ),
+                vibeMixes = if (segment == MixesSegment.Vibes) {
+                    buildVibeMixes(
+                        source,
+                        vibeQuery,
+                        state.liked,
+                        state.longListens,
+                        state.localPlays,
+                        state.audioFeatures
+                    )
+                } else {
+                    emptyList()
+                }
+            )
+        }
+
+    fun library(
+        state: JellyMixState,
+        query: String,
+        visibleTrackLimit: Int,
+        canShowLibraryTracks: Boolean
+    ): LibraryData =
+        cached(
+            currentKey = libraryKey,
+            newKey = screenKey(
+                "library",
+                state.tracks,
+                state.liked,
+                state.skips,
+                state.longListens,
+                state.libraryBrowseMode,
+                state.discoveryFilter,
+                state.currentTrack.id,
+                query,
+                visibleTrackLimit,
+                canShowLibraryTracks
+            ),
+            current = libraryData,
+            assign = { key, data -> libraryKey = key; libraryData = data },
+            label = "library"
+        ) {
+            if (!canShowLibraryTracks) {
+                LibraryData()
+            } else {
+                val tracks = if (query.isBlank()) state.tracks else filterTracks(state.tracks, query)
+                val visibleTracks = tracks.take(visibleTrackLimit)
+                LibraryData(
+                    tracks = tracks,
+                    visibleTracks = visibleTracks,
+                    browseData = buildLibraryBrowseData(
+                        mode = state.libraryBrowseMode,
+                        tracks = if (state.libraryBrowseMode == LibraryBrowseMode.Tracks) visibleTracks else tracks
+                    ),
+                    discoveryTracks = discoveryTracks(
+                        tracks = tracks.take(LibraryDiscoverySourceLimit),
+                        filter = state.discoveryFilter,
+                        liked = state.liked,
+                        skips = state.skips,
+                        longListens = state.longListens,
+                        currentTrack = state.currentTrack
+                    ).take(LibraryInitialVisibleTracks)
+                )
+            }
+        }
+
+    private inline fun <T> cached(
+        currentKey: Int,
+        newKey: Int,
+        current: T,
+        assign: (Int, T) -> Unit,
+        label: String,
+        build: () -> T
+    ): T {
+        if (currentKey == newKey) return current
+        val started = System.currentTimeMillis()
+        val built = build()
+        val elapsed = System.currentTimeMillis() - started
+        val withTiming = when (built) {
+            is HomeData -> built.copy(lastBuildMs = elapsed) as T
+            is MixesData -> built.copy(lastBuildMs = elapsed) as T
+            is LibraryData -> built.copy(lastBuildMs = elapsed) as T
+            else -> built
+        }
+        if (elapsed >= 24L) runCatching { Log.d("JellyMixPerf", "$label data built in ${elapsed}ms") }
+        assign(newKey, withTiming)
+        return withTiming
+    }
+
+    private fun screenKey(label: String, vararg parts: Any?): Int {
+        var result = label.hashCode()
+        parts.forEach { part ->
+            result = 31 * result + when (part) {
+                is List<*> -> 31 * System.identityHashCode(part) + part.size
+                is Map<*, *> -> part.hashCode()
+                is Set<*> -> part.hashCode()
+                else -> part.hashCode()
+            }
+        }
+        return result
+    }
+}
+
+internal data class LibraryBrowseData(
     val mode: LibraryBrowseMode,
     val tracks: List<Track> = emptyList(),
     val artists: List<Pair<String, List<Track>>> = emptyList(),
@@ -4129,9 +4272,16 @@ private fun PlaylistCard(
         modifier = Modifier.clickable { onQueueSelected(mix.name, mix.tracks) },
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(mix.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-            Text(mix.reason, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                MixArtwork(mix)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(mix.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text("${mix.tracks.size} tracks", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                    Text(topArtistsLine(mix.tracks), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            Text(mix.reason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
             mix.note?.let { InfoNote(it) }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                 PrimaryPlayButton(onClick = { onQueueSelected(mix.name, mix.tracks) }, enabled = mix.tracks.isNotEmpty(), modifier = Modifier.weight(1f))
@@ -4139,7 +4289,7 @@ private fun PlaylistCard(
                     Text("Shuffle")
                 }
             }
-            mix.tracks.take(4).forEach { track ->
+            mix.tracks.take(2).forEach { track ->
                 TrackRow(
                     track = track,
                     liked = liked.isLiked(track),
@@ -5938,6 +6088,19 @@ private fun TrackAudioFeatures.closeness(targetBpm: Float, targetEnergy: Float, 
         ) / 5f
     return (1f - distance).coerceIn(0f, 1f)
 }
+
+internal fun topArtistsLine(tracks: List<Track>): String =
+    tracks
+        .asSequence()
+        .map { it.artist.trim() }
+        .filter { it.isNotBlank() }
+        .groupingBy { it }
+        .eachCount()
+        .toList()
+        .sortedWith(compareByDescending<Pair<String, Int>> { it.second }.thenBy { it.first.lowercase() })
+        .take(3)
+        .joinToString(" • ") { it.first }
+        .ifBlank { "Mixed from your library" }
 
 internal fun filterTracks(tracks: List<Track>, query: String): List<Track> {
     val normalized = query.trim().lowercase()
