@@ -356,8 +356,8 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                     ?: cached.tracks.first()
                 val savedPositionMs = savedPlaybackPositionMs(current)
                 val cachedTrackIds = cachedTracksById.keys
-                val stageForHome = state.selectedTab == Tab.Home
-                val startupTracks = if (stageForHome) compactStartupTracksForSavedLibrary(cached.tracks, current, savedQueue, state.recentTrackIds) else cached.tracks
+                val stageCompactUi = state.selectedTab != Tab.Library
+                val startupTracks = if (stageCompactUi) compactStartupTracksForSavedLibrary(cached.tracks, current, savedQueue, state.recentTrackIds) else cached.tracks
                 state = state.copy(
                     tracks = startupTracks,
                     rawTrackCount = cached.rawTrackCount.takeIf { it > 0 } ?: cached.tracks.size,
@@ -373,7 +373,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                     offlineTrackIds = pruneOfflineTrackIds(cachedTrackIds),
                     recentTrackIds = state.recentTrackIds.filter { it in cachedTrackIds },
                     libraryLoaded = true,
-                    status = if (stageForHome) "Ready from saved library. Full library loads when needed." else "Ready from saved library. Refreshing Jellyfin..."
+                    status = if (stageCompactUi) "Ready from saved library. Full library loads when needed." else "Ready from saved library. Refreshing Jellyfin..."
                 )
                 playbackProgress = if (savedPositionMs > 0L) {
                     progressForPosition(current, savedPositionMs)
@@ -597,11 +597,12 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                     playlists = library.playlists,
                     rawTrackCount = library.rawTrackCount.takeIf { it > 0 } ?: prepared.tracks.sumOf { 1 + it.alternates.size }
                 )
-                val stageForHome = backgroundRefresh && state.selectedTab == Tab.Home
-                val currentFromRefreshedLibrary = prepared.tracks.firstOrNull { it.id == state.currentTrack.id }
+                val refreshedTracksById = prepared.tracks.associateBy { it.id }
+                val stageCompactUi = state.selectedTab != Tab.Library
+                val currentFromRefreshedLibrary = refreshedTracksById[state.currentTrack.id]
                     ?: prepared.tracks.firstOrNull()
                     ?: state.currentTrack
-                val uiTracks = if (stageForHome) {
+                val uiTracks = if (stageCompactUi) {
                     compactStartupTracksForSavedLibrary(prepared.tracks, currentFromRefreshedLibrary, state.queue, prepared.recentTrackIds)
                 } else {
                     prepared.tracks
@@ -621,8 +622,8 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                     jellyfinPlaylists = library.playlists,
                     selectedPlaylist = null,
                     selectedPlaylistTracks = emptyList(),
-                    status = if (stageForHome) {
-                        "Connected. Library refreshed in the background."
+                    status = if (stageCompactUi) {
+                        if (backgroundRefresh) "Connected. Library refreshed in the background." else "Connected. Library ready."
                     } else {
                         "Connected. Loaded ${prepared.tracks.size} deduped tracks from ${library.rawTrackCount.takeIf { it > 0 } ?: prepared.tracks.size} library items and ${library.playlists.size} playlists."
                     }
@@ -4016,10 +4017,17 @@ internal class JellyMixDerivedDataCache {
             assign = { key, data -> discoverKey = key; discoverData = data },
             label = "discover"
         ) {
+            val source = rankedMixSourceTracks(
+                tracks = state.tracks,
+                liked = state.liked,
+                longListens = state.longListens,
+                skips = state.skips,
+                localPlays = state.localPlays
+            )
             DiscoverData(
                 trendPlaylists = buildTrendPlaylists(
                     seed = state.currentTrack,
-                    tracks = state.tracks,
+                    tracks = source,
                     liked = state.liked,
                     longListens = state.longListens,
                     skips = state.skips,
@@ -5529,13 +5537,16 @@ data class JellyMixState(
         }
 
     fun recentTracks(): List<Track> =
-        deduplicateTracks(recentTrackIds.mapNotNull { id -> tracks.firstOrNull { it.id == id } })
+        tracks.associateBy { it.id }.let { byId ->
+            deduplicateTracks(recentTrackIds.mapNotNull(byId::get))
+        }
 
     fun recentTrackPlays(): List<RecentTrackPlay> {
         if (recentTrackIds.isEmpty()) return emptyList()
+        val byId = tracks.associateBy { it.id }
         val collapsed = mutableListOf<RecentTrackPlay>()
         recentTrackIds.forEach { id ->
-            val track = tracks.firstOrNull { it.id == id } ?: return@forEach
+            val track = byId[id] ?: return@forEach
             val last = collapsed.lastOrNull()
             if (last?.track?.id == id) {
                 collapsed[collapsed.lastIndex] = last.copy(count = last.count + 1)
@@ -6355,7 +6366,7 @@ internal fun buildTrendPlaylists(
     skips: Map<String, Int>,
     localPlays: Map<String, Int>,
     recentlyPlayedIds: List<String>,
-    features: Map<String, TrackAudioFeatures> = tracks.associate { it.id to inferAudioFeatures(it) }
+    features: Map<String, TrackAudioFeatures> = emptyMap()
 ): List<Mix> {
     val library = deduplicateTracks(tracks)
     if (library.isEmpty()) return emptyList()

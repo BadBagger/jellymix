@@ -91,6 +91,7 @@ Done:
 - The Jellyfin connection card is onboarding-style: it hides after the library actually loads and reappears only when there is no saved session or the saved session fails to load the library.
 - The mini player is a compact expandable playback bar with title marquee, artist subtitle, queue label, previous/play-next controls only, swipe up/down to expand/dismiss, swipe left/right to skip previous/next, and a thin bottom-edge progress line. Shuffle, repeat, and like live in expanded Now Playing.
 - Saved-library startup is crash-hardened: malformed cached track/playlist payloads are treated as an empty cache and cleared before falling back to a live Jellyfin reload, raw count metadata is preserved for status, and saved current/queue/recent startup hydration uses ID maps instead of repeated full-library scans.
+- Startup ANR pressure is reduced for large Jellyfin libraries: saved-cache and live reloads keep Home/Mixes/Discover on a compact working set while retaining the full library snapshot for the Library tab, Discover uses the bounded recommendation source for personalized playlists, and recent-track helpers use a single ID map instead of repeated full-list scans.
 - Recommendation, local play boost, generated mix differentiation/diversity, vibe feature-region classification, tab migration, Jarvis DJ prompt/mode handling, autoplay queue, search, discovery filter, track radio ordering, server URL normalization, queue advancement/end detection, local signal storage, cached library parsing, image tag detection, theme preference parsing, visualizer band tests, audio-analysis tests, and dedup/metadata cleanup tests exist in `app/src/test/java/com/smithware/jellymix/RecommendationTest.kt`.
 - `.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug :app:assembleProfile` passed on July 26, 2026 after the Plexamp-inspired visualizer/state and Library virtualization pass. Emulator launch of the profile APK reported cold start `TotalTime: 1492ms` after the row/artwork allocation pass and reduced the startup Choreographer burst from the debug build's roughly 97 skipped frames to 35 skipped frames, so phone testing should use the profile APK for performance feedback.
 - `.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug` and `.\gradlew.bat :app:assembleProfile` passed on July 26, 2026 after the playback-continuation fix.
@@ -153,6 +154,7 @@ Published:
 - Responsiveness and playlist polish release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.44-responsive-playlists`
 - Back-of-house personalization release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.45-backstage-personalization`
 - Startup cache crash fix release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.46-startup-cache-crash`
+- Startup ANR fix release: `https://github.com/BadBagger/jellymix/releases/tag/v0.1.47-startup-anr-fix`
 - Server reachability from the Windows workspace was confirmed for `http://www.badgerflix.win/System/Info/Public` and `https://www.badgerflix.win/System/Info/Public`; both returned BadgerFlix `10.11.11`. Phone-side library loading still needs verification.
 
 ## Immediate Next Blocker
