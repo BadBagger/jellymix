@@ -340,19 +340,24 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
 
     private fun loadSavedLibraryThenRefresh() {
         viewModelScope.launch {
-            val cached = withContext(Dispatchers.IO) { readCachedLibrary() }
+            val cached = runCatching { withContext(Dispatchers.IO) { readCachedLibrary() } }
+                .getOrElse {
+                    clearCachedLibrary()
+                    JellyfinLibraryLoad()
+                }
             if (cached.tracks.isNotEmpty()) {
                 fullLibrarySnapshot = cached
                 val savedQueueIds = prefs.getString("queueIds", null)?.split(",")?.filter { it.isNotBlank() }.orEmpty()
-                val savedQueue = savedQueueIds.mapNotNull { id -> cached.tracks.firstOrNull { it.id == id } }
+                val cachedTracksById = cached.tracks.associateBy { it.id }
+                val savedQueue = savedQueueIds.mapNotNull(cachedTracksById::get)
                 val savedCurrentTrackId = prefs.getString("currentTrackId", null)
-                val current = cached.tracks.firstOrNull { it.id == savedCurrentTrackId }
+                val current = cachedTracksById[savedCurrentTrackId]
                     ?: savedQueue.firstOrNull()
                     ?: cached.tracks.first()
                 val savedPositionMs = savedPlaybackPositionMs(current)
-                val cachedTrackIds = cached.tracks.map { it.id }.toHashSet()
+                val cachedTrackIds = cachedTracksById.keys
                 val stageForHome = state.selectedTab == Tab.Home
-                val startupTracks = if (stageForHome) compactStartupTracks(cached.tracks, current, savedQueue, state.recentTrackIds) else cached.tracks
+                val startupTracks = if (stageForHome) compactStartupTracksForSavedLibrary(cached.tracks, current, savedQueue, state.recentTrackIds) else cached.tracks
                 state = state.copy(
                     tracks = startupTracks,
                     rawTrackCount = cached.rawTrackCount.takeIf { it > 0 } ?: cached.tracks.size,
@@ -414,19 +419,6 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
         state = state.copy(selectedTab = value)
         prefs.edit().putString("selectedTab", value.name).apply()
         promoteFullLibraryIfNeeded(value)
-    }
-
-    private fun compactStartupTracks(
-        tracks: List<Track>,
-        current: Track,
-        queue: List<Track>,
-        recentIds: List<String>,
-        limit: Int = 320
-    ): List<Track> {
-        val recent = recentIds.mapNotNull { id -> tracks.firstOrNull { it.id == id } }
-        return (listOf(current) + queue.take(60) + recent.take(80) + tracks.take(limit))
-            .distinctBy { it.id }
-            .take(limit)
     }
 
     private fun promoteFullLibraryIfNeeded(targetTab: Tab = state.selectedTab) {
@@ -610,7 +602,7 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
                     ?: prepared.tracks.firstOrNull()
                     ?: state.currentTrack
                 val uiTracks = if (stageForHome) {
-                    compactStartupTracks(prepared.tracks, currentFromRefreshedLibrary, state.queue, prepared.recentTrackIds)
+                    compactStartupTracksForSavedLibrary(prepared.tracks, currentFromRefreshedLibrary, state.queue, prepared.recentTrackIds)
                 } else {
                     prepared.tracks
                 }
@@ -1871,15 +1863,24 @@ class JellyMixViewModel(application: Application) : AndroidViewModel(application
             .apply()
     }
 
-    private fun readCachedLibrary(): JellyfinLibraryLoad =
-        prefs.getString("cachedTracks", null)?.toTrackList().orEmpty().let { cachedTracks ->
-            val dedupedTracks = deduplicateTracks(cachedTracks)
-            JellyfinLibraryLoad(
-                tracks = dedupedTracks,
-                playlists = prefs.getString("cachedPlaylists", null)?.toPlaylistList().orEmpty(),
-                rawTrackCount = prefs.getInt("rawTrackCount", cachedTracks.size)
-            )
+    private fun clearCachedLibrary() {
+        prefs.edit()
+            .remove("cachedTracks")
+            .remove("cachedPlaylists")
+            .remove("rawTrackCount")
+            .apply()
+    }
+
+    private fun readCachedLibrary(): JellyfinLibraryLoad {
+        val trackPayload = prefs.getString("cachedTracks", null)
+        val playlistPayload = prefs.getString("cachedPlaylists", null)
+        val rawTrackCount = runCatching { prefs.getInt("rawTrackCount", 0) }.getOrDefault(0)
+        return cachedLibraryFromPayloads(trackPayload, playlistPayload, rawTrackCount).also { cached ->
+            if (!trackPayload.isNullOrBlank() && cached.tracks.isEmpty()) {
+                clearCachedLibrary()
+            }
         }
+    }
 
     private fun readAudioFeatureCache(tracks: List<Track>): Map<String, TrackAudioFeatures> {
         val cached = prefs.getString("audioFeatures", null)?.toAudioFeatureMap().orEmpty()
@@ -5639,7 +5640,11 @@ internal data class JellyfinSession(val token: String, val userId: String)
 
 internal data class JellyfinTrackFetch(val tracks: List<Track>, val rawTrackCount: Int)
 
-private data class JellyfinLibraryLoad(val tracks: List<Track>, val playlists: List<JellyfinPlaylist>, val rawTrackCount: Int = tracks.sumOf { 1 + it.alternates.size })
+internal data class JellyfinLibraryLoad(
+    val tracks: List<Track> = emptyList(),
+    val playlists: List<JellyfinPlaylist> = emptyList(),
+    val rawTrackCount: Int = tracks.sumOf { 1 + it.alternates.size }
+)
 
 private data class PreparedLibraryState(
     val tracks: List<Track>,
@@ -6674,6 +6679,36 @@ internal fun List<Track>.toTrackCacheString(): String {
         )
     }
     return items.toString()
+}
+
+internal fun cachedLibraryFromPayloads(
+    trackPayload: String?,
+    playlistPayload: String?,
+    rawTrackCount: Int
+): JellyfinLibraryLoad {
+    val cachedTracks = trackPayload?.toTrackList().orEmpty()
+    val dedupedTracks = deduplicateTracks(cachedTracks)
+    return JellyfinLibraryLoad(
+        tracks = dedupedTracks,
+        playlists = playlistPayload?.toPlaylistList().orEmpty(),
+        rawTrackCount = rawTrackCount.takeIf { it > 0 } ?: cachedTracks.size
+    )
+}
+
+internal fun compactStartupTracksForSavedLibrary(
+    tracks: List<Track>,
+    current: Track,
+    queue: List<Track>,
+    recentIds: List<String>,
+    limit: Int = 320
+): List<Track> {
+    if (tracks.isEmpty() || limit <= 0) return emptyList()
+    val byId = tracks.associateBy { it.id }
+    val recent = recentIds.asSequence().mapNotNull(byId::get).take(80)
+    return (sequenceOf(current) + queue.asSequence().take(60) + recent + tracks.asSequence().take(limit))
+        .distinctBy { it.id }
+        .take(limit)
+        .toList()
 }
 
 internal fun String.toTrackList(): List<Track> =

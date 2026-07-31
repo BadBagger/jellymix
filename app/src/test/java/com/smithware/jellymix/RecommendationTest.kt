@@ -831,6 +831,52 @@ class RecommendationTest {
         assertTrue(playlists.flatMap { it.tracks.take(3) }.map { it.id }.toSet().size > 8)
     }
 
+    @Test
+    fun cachedLibraryPayloadFailureReturnsEmptyLoadInsteadOfCrashing() {
+        val cached = cachedLibraryFromPayloads(
+            trackPayload = "{not valid jellymix cache",
+            playlistPayload = "{also bad",
+            rawTrackCount = 29_000
+        )
+
+        assertTrue(cached.tracks.isEmpty())
+        assertTrue(cached.playlists.isEmpty())
+        assertEquals(29_000, cached.rawTrackCount)
+    }
+
+    @Test
+    fun cachedLibraryPayloadDedupsTracksForStartup() {
+        val lowBitrate = sampleTrack("low", liked = false, plays = 0, completion = 0.4f)
+            .copy(title = "Same Song", artist = "Same Artist", durationSec = 200, bitrate = 128_000)
+        val highBitrate = lowBitrate.copy(id = "high", bitrate = 320_000)
+
+        val cached = cachedLibraryFromPayloads(
+            trackPayload = listOf(lowBitrate, highBitrate).toTrackCacheString(),
+            playlistPayload = null,
+            rawTrackCount = 2
+        )
+
+        assertEquals(listOf("high"), cached.tracks.map { it.id })
+        assertEquals(listOf("low"), cached.tracks.first().alternates.map { it.id })
+    }
+
+    @Test
+    fun compactStartupTracksUsesCurrentQueueRecentAndTopWindow() {
+        val tracks = (0 until 500).map { index -> sampleTrack("startup-$index", liked = false, plays = 0, completion = 0.1f) }
+        val compact = compactStartupTracksForSavedLibrary(
+            tracks = tracks,
+            current = tracks[400],
+            queue = listOf(tracks[401], tracks[402], tracks[0]),
+            recentIds = listOf("startup-450", "startup-451", "missing"),
+            limit = 8
+        )
+
+        assertEquals(
+            listOf("startup-400", "startup-401", "startup-402", "startup-0", "startup-450", "startup-451", "startup-1", "startup-2"),
+            compact.map { it.id }
+        )
+    }
+
     private fun sampleTrack(id: String, liked: Boolean, plays: Int, completion: Float): Track =
         Track(
             id = id,
